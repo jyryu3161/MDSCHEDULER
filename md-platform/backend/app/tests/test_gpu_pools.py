@@ -131,6 +131,26 @@ def test_release_frees_a_slot_for_a_waiting_claim():
     assert G.request_gpu(db, "s4", pool=GpuPool.MD) == freed_gid
 
 
+def test_set_gpu_pool_idle_reassign():
+    db = _fresh_db()
+    row = G.set_gpu_pool(db, 0, GpuPool.DESIGN)            # idle md GPU -> design
+    assert row.pool == GpuPool.DESIGN and row.capacity == 1
+    row = G.set_gpu_pool(db, 1, GpuPool.EXCLUDED)          # -> excluded => disabled
+    assert row.pool == GpuPool.EXCLUDED and row.status == "disabled"
+    assert G.set_gpu_pool(db, 999, GpuPool.MD) is None     # unknown GPU
+
+
+def test_set_gpu_pool_busy_rejected():
+    db = _fresh_db()
+    gid = G.request_gpu(db, "s0", pool=GpuPool.MD)         # GPU now holds a running slot
+    assert gid is not None
+    with pytest.raises(G.GpuBusyError):
+        G.set_gpu_pool(db, gid, GpuPool.DESIGN)            # must drain first
+    # after release, reassignment succeeds
+    G.release_gpu(db, "s0")
+    assert G.set_gpu_pool(db, gid, GpuPool.DESIGN).pool == GpuPool.DESIGN
+
+
 def test_runtime_concurrency_change_and_survives_reseed():
     db = _fresh_db()
     G.set_pool_capacity(db, GpuPool.MD, 3)

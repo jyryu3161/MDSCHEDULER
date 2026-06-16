@@ -9,6 +9,14 @@ equilibration, production MD, trajectory analysis, and result packaging.
 The canonical test case is a small-molecule ligand (3-HDC) docked against a
 peptide receptor (KCCIVYP); see "Sample data" below.
 
+It also includes a **peptide-design** subsystem: a PyGAD genetic algorithm that
+evolves peptide sequences to bind a target compound (input: initial sequences +
+one SMILES). Each generation docks candidates (AutoDock Vina / Smina / Gnina) and
+refines the promising ones with MD + MM/GBSA. The dashboard has two tabs — **MD**
+and **Peptide Design** — running on separate GPU pools (configurable: which GPUs
+serve MD vs design, and how many MD jobs run concurrently per GPU). See
+"[Peptide design](#peptide-design-ga)" and "[GPU pools & parallel MD](#gpu-pools--parallel-md)".
+
 ## Overview
 
 - **Frontend**: React + TypeScript + Vite, served by nginx (proxies `/api` to the backend).
@@ -72,6 +80,23 @@ Shared mounts:
   any extra force fields.
 
 ## Quickstart (Docker)
+
+### Turnkey — any server, no GPU (fastest)
+
+One container runs the whole platform (web UI + backend + pipeline) with **real
+AutoDock Vina docking + the peptide-design GA** and the **mock MD engine**, so it
+comes up anywhere with just Docker — no GPU, GROMACS, Redis, or Postgres:
+
+```bash
+git clone git@github.com:jyryu3161/MDSCHEDULER.git
+cd MDSCHEDULER/md-platform
+docker compose -f docker-compose.easy.yml up --build      # or: docker-compose -f ...
+```
+
+Open `http://<server-ip>:8888` → log in **`csbl` / `csbl`** (forced password change).
+See **[DEPLOY.md](DEPLOY.md)** for both this path and the full GPU/real-MD path below.
+
+### Full real MD (GPU server)
 
 Prerequisites: Docker, Docker Compose v2, NVIDIA driver + NVIDIA Container
 Toolkit (for GPU workers). Verify GPU passthrough:
@@ -162,6 +187,38 @@ make dev-worker            # RQ worker against redis://localhost:6379/0
 
 The worker package is installable and named `mdworker` (`pip install -e ./worker`);
 the backend imports it for the `Reporter` Protocol type and the local executor.
+
+## Peptide design (GA)
+
+The **Peptide Design** tab evolves peptides to bind a target compound:
+
+- **Input**: initial peptide sequences (1st generation, all the same length) + one
+  target compound as a SMILES string or a structure file (.sdf/.mol/.mol2/.pdb).
+- **Per generation**: dock every candidate (peptide = receptor, compound = ligand),
+  then MD-refine the promising ones; fitness ranks by binding strength.
+  - **Evaluation strategy**: `hybrid` (default — dock all, MD only the top-k by
+    docking score; efficient) or `md_only` (MD every candidate; most accurate, slowest).
+  - **Docking engine**: `vina` (default, AutoDock Vina 1.2.7, rigid) · `smina`
+    (flexible receptor side chains) · `gnina` (CNN scoring, GPU; needs the binary) ·
+    `auto`. Both strategy and engine are selectable per run in the create form.
+- **Output**: a candidate leaderboard (ΔG / contacts / docking) + a best-so-far
+  convergence chart.
+
+Docking is a coarse high-recall pre-screen; **MD + MM/GBSA is the real ranking
+arbiter**. Note: AutoDock CrankPep / HADDOCK / FlexPepDock were evaluated and are
+*not* used — they dock a peptide *into a protein* (the inverse direction).
+
+## GPU pools & parallel MD
+
+GPUs are partitioned into pools so MD and peptide design never contend:
+
+- `MD_GPU_IDS` / `DESIGN_GPU_IDS` (env) choose which GPU ids serve MD vs design;
+  unlisted GPUs (when `MD_GPU_IDS` is set) are left free for other use.
+- `MD_GPU_CONCURRENCY` (env, default 1) sets how many MD jobs run concurrently per
+  MD-pool GPU. It is also adjustable at runtime from the dashboard ("MD per GPU"),
+  and a GPU's pool can be reassigned there (md/design/excluded) when it is idle.
+
+The MD dashboard GPU cards show each GPU's pool and slot usage (running / capacity).
 
 ## Fixed MD toolchain
 

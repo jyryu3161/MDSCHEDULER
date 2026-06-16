@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -19,6 +21,10 @@ router = APIRouter(prefix="/gpus", tags=["gpus"])
 class ConcurrencyUpdate(BaseModel):
     pool: str = GpuPool.MD
     concurrency: int = Field(ge=1, le=16)
+
+
+class PoolUpdate(BaseModel):
+    pool: Literal["md", "design", "excluded"]
 
 
 @router.get("", response_model=list[GpuStatusOut])
@@ -45,6 +51,27 @@ def set_concurrency(
                             detail=f"pool must be one of: {GpuPool.MD}, {GpuPool.DESIGN}.")
     rows = gpu_manager.set_pool_capacity(db, body.pool, body.concurrency)
     return [GpuStatusOut.model_validate(r) for r in rows]
+
+
+@router.patch("/{gpu_id}/pool", response_model=GpuStatusOut)
+def set_gpu_pool(
+    gpu_id: int,
+    body: PoolUpdate,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+) -> GpuStatusOut:
+    """Reassign a GPU to the MD / design / excluded pool from the dashboard.
+
+    Only allowed when the GPU is idle (no running slots) — reassigning a busy GPU would corrupt
+    per-pool slot accounting; drain it first (409 otherwise).
+    """
+    try:
+        row = gpu_manager.set_gpu_pool(db, gpu_id, body.pool)
+    except gpu_manager.GpuBusyError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="GPU not found.")
+    return GpuStatusOut.model_validate(row)
 
 
 def _set_status(db: Session, gpu_id: int, target: str) -> GpuStatusOut:

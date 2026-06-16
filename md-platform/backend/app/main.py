@@ -191,18 +191,21 @@ def create_app() -> FastAPI:
 
 
 def _maybe_mount_frontend(app: FastAPI, settings) -> None:
-    """Serve a built SPA from STORAGE_ROOT/frontend if present (optional single-origin mode).
+    """Serve a built SPA in single-origin mode.
 
-    Hashed build assets are served from /assets; every other non-/api path falls back to
-    index.html so client-side (BrowserRouter) deep links like /jobs/{id}/results resolve
-    instead of returning a 404 (the production nginx config does the same try_files fallback).
+    Looks for the built bundle at ``FRONTEND_DIST`` (if set — used by the all-in-one image,
+    where the dist is baked at a fixed path that a STORAGE_ROOT volume mount can't shadow),
+    else at ``STORAGE_ROOT/frontend``. Hashed assets are served from /assets; every other
+    non-/api path falls back to index.html so client-side deep links resolve (try_files-style).
     """
+    import os
     from pathlib import Path
 
     from fastapi.responses import FileResponse
     from fastapi.staticfiles import StaticFiles
 
-    dist = Path(settings.STORAGE_ROOT) / "frontend"
+    configured = os.environ.get("FRONTEND_DIST", "").strip()
+    dist = Path(configured) if configured else Path(settings.STORAGE_ROOT) / "frontend"
     index = dist / "index.html"
     if not index.exists():
         return

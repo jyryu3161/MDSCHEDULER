@@ -246,6 +246,10 @@ export const gpuApi = {
     const { data } = await http.patch<GpuStatus[]>("/gpus/concurrency", { pool, concurrency });
     return data;
   },
+  async setPool(gpuId: number, pool: "md" | "design" | "excluded"): Promise<GpuStatus> {
+    const { data } = await http.patch<GpuStatus>(`/gpus/${gpuId}/pool`, { pool });
+    return data;
+  },
 };
 
 // ── Peptide design (GA) (CONTRACT §5 Design) ─────────────────────────────────

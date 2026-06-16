@@ -376,6 +376,41 @@ def set_pool_capacity(db: Session, pool: str, capacity: int) -> list[GpuStatus]:
     return rows
 
 
+class GpuBusyError(Exception):
+    """Raised when a pool reassignment is attempted on a GPU that still holds running slots."""
+
+
+def set_gpu_pool(db: Session, gpu_id: int, pool: str) -> GpuStatus | None:
+    """Reassign a GPU to a pool ("md" | "design" | "excluded") at runtime (dashboard control).
+
+    Only allowed when the GPU is IDLE (running_count == 0): reassigning a GPU that still holds
+    slots would corrupt the per-pool slot accounting (see the reconcile clamp), so the caller
+    must drain it first. Sets the pool, a sane capacity for the new pool (MD keeps the current
+    MD concurrency default; design/excluded = 1), and status (excluded -> disabled). Raises
+    GpuBusyError if busy; returns None if the GPU doesn't exist.
+    """
+    if pool not in GpuPool.ALL:
+        raise ValueError(f"Unknown pool {pool!r}; expected one of {GpuPool.ALL}.")
+    capacity = get_settings().resolved_md_concurrency() if pool == GpuPool.MD else 1
+    new_status = GpuStatusEnum.DISABLED if pool == GpuPool.EXCLUDED else GpuStatusEnum.AVAILABLE
+    # Single conditional UPDATE guarded on running_count == 0, so a scheduler claiming a slot
+    # between a read and the write can't slip a running job onto a GPU we're reassigning
+    # (race-safe, mirrors request_gpu's atomic claim).
+    result = db.execute(
+        update(GpuStatus)
+        .where(GpuStatus.gpu_id == gpu_id, GpuStatus.running_count == 0)
+        .values(pool=pool, capacity=capacity, status=new_status, updated_at=utcnow())
+    )
+    db.commit()
+    if result.rowcount == 1:
+        return db.get(GpuStatus, gpu_id)  # expire_on_commit reloads fresh values
+    # 0 rows affected: the GPU is missing, or it still holds a running slot.
+    row = db.get(GpuStatus, gpu_id)
+    if row is None:
+        return None
+    raise GpuBusyError(f"GPU {gpu_id} has {row.running_count} running slot(s); drain it before reassigning its pool.")
+
+
 def set_gpu_state(db: Session, gpu_id: int, *, status: str, subjob_id: str | None = None) -> GpuStatus | None:
     """Directly set a GPU's scheduling state (used by /internal/gpus/{id}/assign)."""
     row = db.get(GpuStatus, gpu_id)

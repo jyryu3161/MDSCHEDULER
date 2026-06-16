@@ -1,0 +1,74 @@
+# =============================================================================
+# MD Platform — ALL-IN-ONE image (turnkey, no GPU, no GROMACS).
+#
+# One container runs the WHOLE web platform: FastAPI backend (local in-process
+# queue) + bundled React SPA + the mdworker pipeline, with:
+#   • real AutoDock Vina docking + the peptide-design GA (CPU: rdkit/vina/meeko/
+#     openbabel/pygad/PeptideBuilder)
+#   • the MOCK MD engine (synthetic trajectories + analysis) — so it brings up on
+#     ANY Docker host with no GPU / GROMACS / Redis / Postgres.
+#
+# Bring up:   docker compose -f docker-compose.easy.yml up --build
+#             → http://localhost:8888  (admin csbl / csbl, forced password change)
+#
+# For REAL GROMACS MD on a GPU host, use the full docker-compose.yml instead
+# (md-env GROMACS image + NVIDIA Container Toolkit).
+# =============================================================================
+
+# ── Stage 1: build the frontend bundle ──────────────────────────────────────
+FROM node:22-slim AS frontend
+WORKDIR /fe
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build      # -> /fe/dist
+
+# ── Stage 2: backend + worker + scientific CPU stack + baked SPA ─────────────
+FROM python:3.11-slim
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+# openbabel provides the `obabel` CLI used for receptor prep (docking). curl for
+# the healthcheck. No GPU/GROMACS toolchain — this is the CPU turnkey image.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openbabel curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Backend runtime deps.
+COPY backend/requirements.txt /app/backend/requirements.txt
+RUN pip install --upgrade pip && pip install -r /app/backend/requirements.txt
+
+# Worker package (mdworker) + its core deps (rdkit/numpy/scipy/networkx).
+COPY worker /app/worker
+RUN pip install ./worker
+
+# Peptide-design docking/GA extras (all CPU, pip-installable). meeko ships the
+# mk_prepare_ligand.py CLI (and needs gemmi); vina is the AutoDock Vina Python API.
+RUN pip install "vina>=1.2" "meeko>=0.5" "gemmi" "pygad>=3.3" "PeptideBuilder>=1.1" "biopython>=1.81" \
+    && python -c "import vina, meeko, pygad, PeptideBuilder, Bio, rdkit; print('design stack import OK')"
+
+# Application code, MD templates (used by the real engine; harmless under mock),
+# and the built SPA (served from FRONTEND_DIST so a storage volume can't shadow it).
+COPY backend/app /app/app
+COPY md-env /app/md-env
+COPY --from=frontend /fe/dist /opt/frontend
+
+RUN mkdir -p /app/storage
+
+ENV QUEUE_BACKEND=local \
+    MD_ENGINE=mock \
+    DOCK_ENGINE=vina \
+    DATABASE_URL=sqlite:////app/storage/md_platform.db \
+    STORAGE_ROOT=/app/storage \
+    FRONTEND_DIST=/opt/frontend \
+    MDP_TEMPLATE_DIR=/app/md-env/templates/gromacs
+
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=5 \
+    CMD curl -fsS http://localhost:8000/api/health || exit 1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

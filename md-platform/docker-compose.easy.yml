@@ -1,0 +1,41 @@
+# =============================================================================
+# MD Platform — TURNKEY single-container deployment (no GPU, no GROMACS).
+#
+#   docker compose -f docker-compose.easy.yml up --build
+#   → open http://localhost:8888   (admin: csbl / csbl — forced password change)
+#
+# Runs the full web platform with real AutoDock Vina docking + the peptide-design
+# GA, and the MOCK MD engine (so it brings up anywhere with just Docker). State
+# (SQLite DB + jobs) persists in the `md_storage` volume.
+#
+# For REAL GROMACS MD on a GPU host, use docker-compose.yml instead.
+# =============================================================================
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.allinone
+    image: md-platform-allinone:latest
+    ports:
+      - "${APP_PORT:-8888}:8000"
+    environment:
+      QUEUE_BACKEND: local
+      MD_ENGINE: mock
+      DOCK_ENGINE: ${DOCK_ENGINE:-vina}
+      DATABASE_URL: sqlite:////app/storage/md_platform.db
+      STORAGE_ROOT: /app/storage
+      FRONTEND_DIST: /opt/frontend
+      # Placeholder GPUs for the scheduler/UI (the mock engine ignores real devices).
+      # GPU 1 is carved out as the peptide-design pool; the rest run MD.
+      NUM_GPUS: ${NUM_GPUS:-2}
+      DESIGN_GPU_IDS: ${DESIGN_GPU_IDS:-1}
+      # CHANGE THESE for any non-local use (defaults are the zero-config quickstart).
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      DEFAULT_ADMIN_ID: ${DEFAULT_ADMIN_ID:-csbl}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-csbl}
+    volumes:
+      - md_storage:/app/storage
+    restart: unless-stopped
+
+volumes:
+  md_storage:

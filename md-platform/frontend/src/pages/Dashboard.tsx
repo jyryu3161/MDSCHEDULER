@@ -34,6 +34,7 @@ export function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [live, setLive] = useState(false);
   const [gpuBusy, setGpuBusy] = useState<number | null>(null);
+  const [mdConc, setMdConc] = useState<number | null>(null);  // null = follow current md capacity
 
   // Avoid overlapping polls / stale writes after unmount.
   const mounted = useRef(true);
@@ -142,6 +143,28 @@ export function Dashboard() {
       setError(normalizeError(err).message);
     } finally {
       setGpuBusy(null);
+    }
+  };
+
+  const onSetPool = async (gpuId: number, pool: "md" | "design" | "excluded") => {
+    setGpuBusy(gpuId);
+    try {
+      const updated = await gpuApi.setPool(gpuId, pool);
+      setGpus((prev) => prev.map((g) => (g.gpu_id === gpuId ? updated : g)));
+    } catch (err) {
+      setError(normalizeError(err).message); // 409 if the GPU is still running a job
+    } finally {
+      setGpuBusy(null);
+    }
+  };
+
+  const onSetMdConcurrency = async (n: number) => {
+    try {
+      const updated = await gpuApi.setConcurrency("md", n);
+      const byId = new Map(updated.map((g) => [g.gpu_id, g]));
+      setGpus((prev) => prev.map((g) => byId.get(g.gpu_id) ?? g));
+    } catch (err) {
+      setError(normalizeError(err).message);
     }
   };
 
@@ -330,7 +353,38 @@ export function Dashboard() {
       </div>
 
       {/* GPU panel */}
-      <Card title="GPUs">
+      <Card
+        title="GPUs"
+        actions={
+          isAdmin && gpus.some((g) => g.pool === "md") ? (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-slate-500">MD per GPU</span>
+              <input
+                type="number"
+                min={1}
+                max={16}
+                aria-label="Concurrent MD jobs per GPU"
+                className="w-16 rounded-md border border-slate-300 px-2 py-1 text-xs"
+                value={mdConc ?? Math.max(1, ...gpus.filter((g) => g.pool === "md").map((g) => g.capacity), 1)}
+                onChange={(e) => setMdConc(Number(e.target.value))}
+              />
+              <button
+                type="button"
+                className="btn-secondary !px-2 !py-1 !text-xs"
+                onClick={() => {
+                  const fallback = Math.max(1, ...gpus.filter((g) => g.pool === "md").map((g) => g.capacity), 1);
+                  const raw = mdConc ?? fallback;
+                  // Clamp to the API's 1..16 (HTML min/max don't enforce typed values).
+                  const n = Math.min(16, Math.max(1, Math.round(Number.isFinite(raw) ? raw : fallback)));
+                  void onSetMdConcurrency(n).then(() => setMdConc(null));
+                }}
+              >
+                Apply
+              </button>
+            </div>
+          ) : undefined
+        }
+      >
         {gpus.length === 0 ? (
           <p className="text-sm text-slate-500">No GPUs registered.</p>
         ) : (
@@ -376,6 +430,14 @@ export function Dashboard() {
                       {g.assigned_subjob_id ?? "—"}
                     </span>
                   </div>
+                  <div className="flex justify-between pt-1">
+                    <span>Pool</span>
+                    <span className="font-medium uppercase">{g.pool}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Slots (running / capacity)</span>
+                    <span className="tabular-nums">{g.running_count} / {g.capacity}</span>
+                  </div>
                 </div>
                 {isAdmin && (
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -405,6 +467,21 @@ export function Dashboard() {
                     >
                       Maintenance
                     </button>
+                    <label className="flex items-center gap-1 text-xs text-slate-500">
+                      Pool
+                      <select
+                        aria-label={`GPU ${g.gpu_id} pool`}
+                        className="rounded-md border border-slate-300 px-1.5 py-1 text-xs"
+                        disabled={gpuBusy === g.gpu_id || g.running_count > 0}
+                        title={g.running_count > 0 ? "Drain the GPU before reassigning its pool" : undefined}
+                        value={g.pool}
+                        onChange={(e) => onSetPool(g.gpu_id, e.target.value as "md" | "design" | "excluded")}
+                      >
+                        <option value="md">md</option>
+                        <option value="design">design</option>
+                        <option value="excluded">excluded</option>
+                      </select>
+                    </label>
                   </div>
                 )}
               </div>
