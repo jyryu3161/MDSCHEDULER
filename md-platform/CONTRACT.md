@@ -231,24 +231,28 @@ other than `/auth/login` require auth. Admin-only endpoints checked by role.
 ### Peptide design (GA) (§19.6)
 - `POST /api/design` (multipart) → `DesignJob`. Form fields: `name`, `initial_sequences`
   (comma/space/newline-separated, all one length, standard AAs), `population_size`,
-  `num_generations`, `top_k_md`, `md_length_ns`, `exhaustiveness`, `compound_name`; plus a
+  `num_generations`, `top_k_md`, `md_length_ns`, `exhaustiveness`, `eval_mode`
+  (`hybrid`|`md_only`), `dock_engine` (`vina`|`smina`|`gnina`|`auto`), `compound_name`; plus a
   `compound` file (.sdf/.mol/.mol2/.pdb/.smi) OR a `smiles` string. Runs on the GPU design pool.
 - `GET /api/design` → `[DesignJob]` (own jobs; admin sees all).
 - `GET /api/design/{id}` → `DesignJobDetail` = `{job, candidates[] (leaderboard, fitness desc),
   generations[] (best-so-far convergence curve)}`.
 - `POST /api/design/{id}/cancel` → `DesignJob` (status cancelled; runner aborts between generations).
 
-GA: fixed-length peptide (= initial length), genes are AA indices 0..19; hybrid evaluation
-per generation — dock ALL candidates, MD-refine the top-k by docking score (GROMACS+MM/GBSA
-on the design GPU), fitness = −ΔG for refined elites else −docking_score.
-Tables `designjobs` + `designcandidates`.
+GA: fixed-length peptide (= initial length), genes are AA indices 0..19. Per-generation
+`eval_mode`: `hybrid` (default — dock ALL candidates, MD-refine only the top-k by docking
+score; fitness = −ΔG for refined elites else −docking_score) or `md_only` (MD-refine EVERY
+candidate; fitness = −ΔG for all — most accurate, most costly). Docking always runs (it
+produces the MD start pose). Tables `designjobs` + `designcandidates`.
 
-Docking engine (DOCK_ENGINE: vina | smina | auto): **Vina** is the DEFAULT (AutoDock Vina
-1.2.7, rigid receptor, deterministic); **Smina** is opt-in (`DOCK_ENGINE=smina`) and adds
-flexible receptor side chains (Vina-1.1.2-core scoring + `--flexdist`); `auto` = smina if
-installed else vina. The peptide is the RECEPTOR, the SMILES compound the LIGAND. Docking is a
-COARSE pre-screen; MD + MM/GBSA is the real ranking arbiter. (Implementation params —
-box/exhaustiveness/prep — live in `worker/mdworker/design/docking.py`.)
+Docking engine (DOCK_ENGINE / per-run `dock_engine`: vina | smina | gnina | auto): **Vina** is
+the DEFAULT (AutoDock Vina 1.2.7, rigid, deterministic); **Smina** opt-in (flexible receptor
+side chains via `--flexdist`); **Gnina** opt-in (Smina/Vina fork + CNN scoring, GPU — requires
+the `gnina` binary; uses Vina-style minimizedAffinity for GA-comparable fitness); `auto` = smina
+if installed else vina (never gnina). The peptide is the RECEPTOR, the SMILES compound the
+LIGAND. NOTE: AutoDock CrankPep / HADDOCK / FlexPepDock were evaluated and are NOT supported —
+they dock a peptide INTO a protein (the inverse direction) and have no usable small-molecule→
+peptide path. Docking is a COARSE pre-screen; MD + MM/GBSA is the real ranking arbiter.
 
 ### Results (§19.6)
 - `GET /api/jobs/{job_id}/results` → `{job, subjobs:[{...,analysis_summary, plots_available:[PlotType], has_trajectory, has_movie}]}`.

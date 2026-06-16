@@ -426,6 +426,9 @@ export interface TrajectoryPayload {
 
 // ── Peptide design (GA) ──────────────────────────────────────────────────────
 
+export type DesignEvalMode = "hybrid" | "md_only";
+export type DesignDockEngine = "vina" | "smina" | "gnina" | "auto";
+
 export interface DesignJob {
   id: string;
   user_id: number;
@@ -437,6 +440,8 @@ export interface DesignJob {
   num_generations: number;
   top_k_md: number;
   md_length_ns: number;
+  eval_mode: DesignEvalMode;
+  dock_engine: DesignDockEngine;
   current_generation: number;
   progress: number;
   assigned_gpu: number | null;
@@ -481,6 +486,8 @@ export interface DesignJobCreate {
   top_k_md: number;
   md_length_ns: number;
   exhaustiveness: number;
+  eval_mode: DesignEvalMode;     // hybrid (dock→top-k MD) | md_only (MD all)
+  dock_engine: DesignDockEngine; // vina | smina | gnina | auto
   compound_name: string;
   smiles?: string;
   compound?: File | null;

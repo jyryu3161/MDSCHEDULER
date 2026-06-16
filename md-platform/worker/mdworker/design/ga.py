@@ -63,14 +63,28 @@ class DesignResult:
     candidates: List[CandidateEval] = field(default_factory=list)  # every evaluated candidate
 
 
+EVAL_MODES = ("hybrid", "md_only")
+
+
 class HybridEvaluator:
-    """Owns the dock-all → MD-top-k hybrid policy and the cross-generation memoization."""
+    """Owns the per-generation evaluation policy and the cross-generation memoization.
+
+    eval_mode:
+      "hybrid"  (default) — dock ALL candidates, MD-refine only the top-k by docking score
+                            (efficient: docking pre-screens, MD is the expensive minority).
+      "md_only"           — dock ALL (to produce the starting pose + screen docking failures),
+                            then MD-refine EVERY scored candidate (most accurate, most costly).
+    Docking always runs in both modes because MD needs the docked complex as its start.
+    """
 
     def __init__(self, dock_batch: DockBatch, md_batch: MdBatch, top_k: int,
-                 progress: Optional[ProgressCb] = None):
+                 eval_mode: str = "hybrid", progress: Optional[ProgressCb] = None):
+        if eval_mode not in EVAL_MODES:
+            raise ValueError(f"Unknown eval_mode {eval_mode!r}; expected one of {EVAL_MODES}.")
         self.dock_batch = dock_batch
         self.md_batch = md_batch
         self.top_k = max(1, int(top_k))
+        self.eval_mode = eval_mode
         self.progress = progress
         self.cache: Dict[str, CandidateEval] = {}
         self._records: Dict[int, GenerationRecord] = {}  # keyed by generation (dedup)
@@ -101,10 +115,13 @@ class HybridEvaluator:
                     fitness=(_FAILED_FITNESS if sc is None else -float(sc)),
                 )
 
-        # 2) pick the generation's top-k by docking score (best = most negative); refine w/ MD
+        # 2) choose which scored candidates get MD: in "hybrid" the top-k by docking score; in
+        #    "md_only" every scored candidate (docking still ran to provide the pose + screen out
+        #    docking failures). Then MD-refine those not yet refined.
         scored = [s for s in unique if self.cache.get(s) and self.cache[s].docking_score is not None]
         scored.sort(key=lambda s: self.cache[s].docking_score)  # ascending: best first
-        elites = [s for s in scored[:self.top_k] if not self.cache[s].refined]
+        selected = scored if self.eval_mode == "md_only" else scored[:self.top_k]
+        elites = [s for s in selected if not self.cache[s].refined]
         # Candidates whose state changed this generation (newly docked OR newly refined) — these
         # must be (re)persisted so an earlier-seen candidate refined now emits its ΔG/fitness.
         touched = set(to_dock)
@@ -120,7 +137,7 @@ class HybridEvaluator:
                     ce.refined = True
                     touched.add(s)
 
-        self._record_generation(generation, unique, scored[:self.top_k], touched)
+        self._record_generation(generation, unique, selected, touched)
 
     def _record_generation(self, generation: int, evaluated_this_gen: List[str],
                            elites: List[str], touched: set) -> None:
@@ -161,6 +178,7 @@ def run_ga(
     num_generations: int = 5,
     population_size: int = 10,
     top_k_md: int = 2,
+    eval_mode: str = "hybrid",
     num_parents_mating: Optional[int] = None,
     mutation_percent_genes: float = 20.0,
     keep_elitism: int = 2,
@@ -190,7 +208,8 @@ def run_ga(
         seed_genes.append(list(rng.integers(0, len(AA1), size=num_genes)))
     initial_population = np.array([g[:num_genes] for g in seed_genes[:population_size]], dtype=int)
 
-    evaluator = HybridEvaluator(dock_batch, md_batch, top_k=top_k_md, progress=progress)
+    evaluator = HybridEvaluator(dock_batch, md_batch, top_k=top_k_md, eval_mode=eval_mode,
+                                progress=progress)
 
     def fitness_func(ga_instance, solutions, solution_indices):
         # fitness_batch_size makes PyGAD pass the whole batch of solutions needing evaluation.

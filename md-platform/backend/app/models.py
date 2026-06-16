@@ -298,6 +298,10 @@ class DesignJob(Base):
     top_k_md: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
     md_length_ns: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
     exhaustiveness: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
+    # Per-generation evaluation policy: "hybrid" (dock all -> MD top-k) | "md_only" (MD all).
+    eval_mode: Mapped[str] = mapped_column(String(16), default="hybrid", nullable=False)
+    # Docking engine for this run: "vina" (default) | "smina" | "auto".
+    dock_engine: Mapped[str] = mapped_column(String(16), default="vina", nullable=False)
 
     # Progress + results.
     current_generation: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

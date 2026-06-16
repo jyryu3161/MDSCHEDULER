@@ -13,7 +13,7 @@ import {
   type Column,
 } from "../components";
 import { DashboardTabs } from "../components/DashboardTabs";
-import type { DesignJob, GpuStatus } from "../types";
+import type { DesignDockEngine, DesignEvalMode, DesignJob, GpuStatus } from "../types";
 
 const POLL_MS = 4000;
 
@@ -134,6 +134,8 @@ function CreateDesignForm({ onCreated }: { onCreated: () => void }) {
   const [topK, setTopK] = useState(2);
   const [mdNs, setMdNs] = useState(10);
   const [exhaustiveness, setExhaustiveness] = useState(8);
+  const [evalMode, setEvalMode] = useState<DesignEvalMode>("hybrid");
+  const [dockEngine, setDockEngine] = useState<DesignDockEngine>("vina");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -166,8 +168,8 @@ function CreateDesignForm({ onCreated }: { onCreated: () => void }) {
       const job = await designApi.create({
         name, initial_sequences: sequences, population_size: population,
         num_generations: generations, top_k_md: topK, md_length_ns: mdNs,
-        exhaustiveness, compound_name: compoundName,
-        smiles: smiles.trim() || undefined, compound,
+        exhaustiveness, eval_mode: evalMode, dock_engine: dockEngine,
+        compound_name: compoundName, smiles: smiles.trim() || undefined, compound,
       });
       onCreated();
       navigate(`/design/${job.id}`);
@@ -225,6 +227,27 @@ function CreateDesignForm({ onCreated }: { onCreated: () => void }) {
           <NumField label="Top-k MD" value={topK} setValue={setTopK} min={1} max={50} />
           <NumField label="MD length (ns)" value={mdNs} setValue={setMdNs} min={1} max={1000} />
           <NumField label="Exhaustiveness" value={exhaustiveness} setValue={setExhaustiveness} min={1} max={64} />
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <label className={labelCls}>Evaluation strategy</label>
+            <select className={inputCls} aria-label="Evaluation strategy" value={evalMode}
+                    onChange={(e) => setEvalMode(e.target.value as DesignEvalMode)}>
+              <option value="hybrid">Docking → MD top-k (hybrid, efficient)</option>
+              <option value="md_only">MD on every candidate (most accurate, slowest)</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelCls}>Docking engine</label>
+            <select className={inputCls} aria-label="Docking engine" value={dockEngine}
+                    onChange={(e) => setDockEngine(e.target.value as DesignDockEngine)}>
+              <option value="vina">AutoDock Vina 1.2.7 (rigid, default)</option>
+              <option value="smina">Smina (flexible receptor side chains)</option>
+              <option value="gnina">Gnina (CNN scoring, GPU — requires install)</option>
+              <option value="auto">Auto (Smina if installed, else Vina)</option>
+            </select>
+          </div>
         </div>
 
         <div className="flex items-center gap-3">

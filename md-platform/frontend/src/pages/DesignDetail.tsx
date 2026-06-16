@@ -137,7 +137,9 @@ export function DesignDetail() {
           <h1 className="text-xl font-semibold text-slate-900">{job.name}</h1>
           <p className="text-sm text-slate-500">
             Target: {job.compound_name} · peptide length {job.peptide_length} ·
-            population {job.population_size} · {job.num_generations} generations · top-{job.top_k_md} MD @ {job.md_length_ns} ns
+            population {job.population_size} · {job.num_generations} generations ·{" "}
+            {job.eval_mode === "md_only" ? "MD all" : `top-${job.top_k_md} MD`} @ {job.md_length_ns} ns ·
+            dock: {job.dock_engine}
           </p>
         </div>
         <div className="flex items-center gap-3">

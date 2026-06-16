@@ -122,6 +122,28 @@ def test_cancel_design(client):
     assert c.status_code == 200 and c.json()["status"] == "cancelled"
 
 
+def test_eval_mode_and_dock_engine_round_trip(client):
+    h = _auth(client)
+    j = client.post("/api/design", headers=h, data={
+        "name": "md-only smina run", "initial_sequences": "KCCIVYP",
+        "smiles": "C", "eval_mode": "md_only", "dock_engine": "smina",
+    }).json()
+    assert j["eval_mode"] == "md_only" and j["dock_engine"] == "smina"
+    # defaults when omitted
+    d = client.post("/api/design", headers=h,
+                    data={"name": "defaults", "initial_sequences": "KCCIVYP", "smiles": "C"}).json()
+    assert d["eval_mode"] == "hybrid" and d["dock_engine"] == "vina"
+
+
+def test_invalid_dock_engine_rejected(client):
+    h = _auth(client)
+    # ADCP etc. are peptide-into-protein tools, not valid small-molecule docking engines.
+    r = client.post("/api/design", headers=h, data={
+        "name": "bad engine", "initial_sequences": "KCCIVYP", "smiles": "C", "dock_engine": "adcp",
+    })
+    assert r.status_code == 422
+
+
 def _make_user(username: str, password: str) -> None:
     from app.models import User
     from app.security import hash_password

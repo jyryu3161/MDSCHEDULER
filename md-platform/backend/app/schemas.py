@@ -332,6 +332,11 @@ class DesignJobCreate(BaseModel):
     top_k_md: int = Field(default=2, ge=1, le=50)
     md_length_ns: int = Field(default=10, ge=1, le=1000)
     exhaustiveness: int = Field(default=8, ge=1, le=64)
+    # Per-generation evaluation policy: "hybrid" (dock all -> MD top-k, efficient, default) or
+    # "md_only" (MD every candidate, most accurate, most costly).
+    eval_mode: Literal["hybrid", "md_only"] = "hybrid"
+    # Docking engine for this run (selectable at GA launch): vina (default) | smina | gnina | auto.
+    dock_engine: Literal["vina", "smina", "gnina", "auto"] = "vina"
     # SMILES is written to disk as compound.smi; cap it so it can't bypass the upload size limit.
     smiles: str | None = Field(default=None, max_length=10000)
     compound_name: str = Field(default="compound", max_length=255)  # matches DB String(255)
@@ -377,6 +382,8 @@ class DesignJobOut(BaseModel):
     num_generations: int
     top_k_md: int
     md_length_ns: int
+    eval_mode: str = "hybrid"
+    dock_engine: str = "vina"
     current_generation: int
     progress: float
     assigned_gpu: int | None = None

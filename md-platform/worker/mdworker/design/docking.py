@@ -164,13 +164,14 @@ def _box_from_pdbqt(receptor_pdbqt: Path, margin: float = 8.0, *, seq_len: int =
     return center, size
 
 
-_ENGINES = ("auto", "smina", "vina")
+_ENGINES = ("auto", "smina", "vina", "gnina")
 
 
 def resolve_engine(engine: str) -> str:
-    """Resolve the docking engine. 'auto' -> smina if on PATH else vina; 'smina'/'vina' pass
-    through. Any other value raises (an unknown engine must never silently fall back, which
-    would mislabel DockResult.engine and hide a config typo)."""
+    """Resolve the docking engine. 'auto' -> smina if on PATH else vina; 'smina'/'vina'/'gnina'
+    pass through. Any other value raises (an unknown engine must never silently fall back, which
+    would mislabel DockResult.engine and hide a config typo). 'auto' never picks gnina (GPU/heavy,
+    opt-in only)."""
     engine = (engine or "auto").strip().lower()
     if engine not in _ENGINES:
         raise ValueError(f"Unknown docking engine {engine!r}; expected one of {_ENGINES}.")
@@ -259,6 +260,40 @@ def _dock_smina(receptor_pdbqt: Path, ligand_pdbqt: Path, center, box, pose_path
     return all_scores[0], all_scores, n_flex
 
 
+def _dock_gnina(receptor_pdbqt: Path, ligand_pdbqt: Path, center, box, pose_path: Path,
+                *, exhaustiveness: int, n_poses: int, cpu: int, seed: int, flexdist: float):
+    """Gnina (Smina/Vina fork + CNN scoring) with flexible receptor side chains.
+
+    Gnina is the small-molecule-into-receptor engine recommended for the peptide-as-receptor
+    regime (a docking-methods evaluation rejected ADCP/HADDOCK/FlexPepDock as peptide-INTO-protein
+    tools — the wrong direction). It shares Smina's CLI surface; ``--cnn_scoring rescore`` reranks
+    poses with the CNN while still writing the Vina-style ``minimizedAffinity`` we use for the GA
+    fitness (kept comparable to vina/smina). Requires the ``gnina`` binary (GPU) on PATH.
+
+    NOTE: unvalidated for the peptide-receptor setting on this host (gnina not installed here);
+    a re-docking / known-binder sanity check should precede production use.
+    """
+    gnina = _require("gnina")
+    if pose_path.exists():
+        pose_path.unlink()
+    cmd = [
+        gnina, "-r", str(receptor_pdbqt), "-l", str(ligand_pdbqt),
+        "--center_x", f"{center[0]:.3f}", "--center_y", f"{center[1]:.3f}", "--center_z", f"{center[2]:.3f}",
+        "--size_x", f"{box[0]:.3f}", "--size_y", f"{box[1]:.3f}", "--size_z", f"{box[2]:.3f}",
+        "--exhaustiveness", str(exhaustiveness), "--num_modes", str(n_poses),
+        "--cpu", str(max(1, cpu)), "--seed", str(seed), "--cnn_scoring", "rescore",
+        "--flexdist_ligand", str(ligand_pdbqt), "--flexdist", f"{flexdist:.2f}",
+        "--out", str(pose_path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
+    if proc.returncode != 0 or not pose_path.exists() or pose_path.stat().st_size == 0:
+        raise RuntimeError(f"gnina failed (rc={proc.returncode}): {(proc.stderr or proc.stdout)[-400:]}")
+    all_scores = _parse_smina_scores(pose_path)  # gnina writes REMARK minimizedAffinity too
+    if not all_scores:
+        raise RuntimeError(f"gnina produced no parseable affinity in {pose_path.name}.")
+    return all_scores[0], all_scores, None
+
+
 def dock_peptide_compound(
     sequence: str,
     ligand_pdbqt: Path,
@@ -276,10 +311,10 @@ def dock_peptide_compound(
     """Build ``sequence``, dock the (pre-prepared) compound against it, return the best score.
 
     ``engine``: "vina" (DEFAULT — AutoDock Vina 1.2.7, rigid receptor, deterministic), "smina"
-    (opt-in — adds flexible receptor side chains via --flexdist), or "auto" (smina if on PATH,
-    else vina). Docking is a coarse high-recall pre-screen for the GA; MD + MM/GBSA is the real
-    ranking arbiter. All per-candidate files live under ``workdir/<token(sequence)>/`` so
-    concurrent docking of distinct sequences can't collide.
+    (opt-in — adds flexible receptor side chains via --flexdist), "gnina" (Smina/Vina fork with
+    CNN scoring, GPU, opt-in), or "auto" (smina if on PATH, else vina). Docking is a coarse
+    high-recall pre-screen for the GA; MD + MM/GBSA is the real ranking arbiter. All per-candidate
+    files live under ``workdir/<token(sequence)>/`` so concurrent docking can't collide.
     """
     eng = resolve_engine(engine)
     workdir = Path(workdir) / _safe_token(sequence)
@@ -291,6 +326,10 @@ def dock_peptide_compound(
 
     if eng == "smina":
         best, all_scores, n_flex = _dock_smina(
+            receptor_pdbqt, ligand_pdbqt, center, box, pose_path,
+            exhaustiveness=exhaustiveness, n_poses=n_poses, cpu=cpu, seed=seed, flexdist=flexdist)
+    elif eng == "gnina":
+        best, all_scores, n_flex = _dock_gnina(
             receptor_pdbqt, ligand_pdbqt, center, box, pose_path,
             exhaustiveness=exhaustiveness, n_poses=n_poses, cpu=cpu, seed=seed, flexdist=flexdist)
     else:

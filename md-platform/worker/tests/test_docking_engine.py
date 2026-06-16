@@ -24,9 +24,19 @@ def test_resolve_engine_valid_values(monkeypatch):
     assert D.resolve_engine("") == "vina"           # empty -> auto -> vina here
 
 
-def test_resolve_engine_rejects_unknown():
+def test_resolve_engine_accepts_gnina_passthrough(monkeypatch):
+    # gnina passes through (opt-in); auto never picks it even when only gnina is installed.
+    assert D.resolve_engine("gnina") == "gnina"
+    monkeypatch.setattr(D.shutil, "which", lambda name: "/usr/bin/gnina" if name == "gnina" else None)
+    assert D.resolve_engine("auto") == "vina"        # smina absent -> vina, never gnina
+
+
+@pytest.mark.parametrize("bad", ["glide", "adcp", "haddock", "flexpepdock"])
+def test_resolve_engine_rejects_unknown(bad):
+    # Unknown / unsupported engines (incl. the peptide-into-protein tools) must raise, not
+    # silently fall back to vina.
     with pytest.raises(ValueError):
-        D.resolve_engine("glide")                    # never silently fall back
+        D.resolve_engine(bad)
 
 
 def test_box_adaptive_margin_scales_with_length(tmp_path):

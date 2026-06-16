@@ -27,15 +27,16 @@ def _design_config(dj: DesignJob) -> dict:
         "top_k_md": dj.top_k_md,
         "md_length_ns": dj.md_length_ns,
         "exhaustiveness": dj.exhaustiveness,
+        "eval_mode": dj.eval_mode,
     }
 
 
-def _runner_settings() -> dict:
+def _runner_settings(dj: DesignJob) -> dict:
     s = get_settings()
     return {
         "STORAGE_ROOT": s.STORAGE_ROOT,
         "MD_ENGINE": s.resolved_md_engine(),
-        "DOCK_ENGINE": s.DOCK_ENGINE,
+        "DOCK_ENGINE": dj.dock_engine or s.DOCK_ENGINE,  # per-run choice overrides the env default
         "MDP_TEMPLATE_DIR": s.MDP_TEMPLATE_DIR,
         "TRAJECTORY_OUTPUT_PS": s.TRAJECTORY_OUTPUT_PS,
         "PROTEIN_FORCE_FIELD": s.PROTEIN_FORCE_FIELD,
@@ -54,6 +55,7 @@ def run_design_job(design_id: str) -> None:
         if dj is None:
             return
         config = _design_config(dj)
+        settings = _runner_settings(dj)  # build while dj is still attached to the session
     finally:
         db.close()
 
@@ -67,7 +69,7 @@ def run_design_job(design_id: str) -> None:
         return
 
     try:
-        run_design(design_id, config, reporter, _runner_settings())
+        run_design(design_id, config, reporter, settings)
     except Exception as exc:  # noqa: BLE001 — runner sets terminal status; this is a backstop
         reporter.set_status(design_id, JobStatus.FAILED, error_message=str(exc))
         reporter.log(design_id, "error", "design", f"Design execution error: {exc}")

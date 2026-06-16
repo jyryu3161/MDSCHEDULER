@@ -54,13 +54,16 @@ def run_design(design_id: str, config: Dict[str, Any], reporter, settings: Dict[
     top_k_md = int(config.get("top_k_md", 2))
     md_length_ns = float(config.get("md_length_ns", 10.0))
     exhaustiveness = int(config.get("exhaustiveness", 16))
+    eval_mode = str(config.get("eval_mode", "hybrid"))  # "hybrid" (dock->top-k MD) | "md_only"
     md_engine = str(settings.get("MD_ENGINE", "mock")).lower()
     if md_engine == "auto":
         md_engine = "gromacs" if md_eval.gromacs_available() else "mock"
     # Docking engine: default "vina" (AutoDock Vina 1.2.7, rigid); set DOCK_ENGINE=smina for
     # flexible receptor side chains, or "auto" to use smina when installed.
     dock_engine = docking.resolve_engine(str(settings.get("DOCK_ENGINE", "vina")))
-    log(f"Docking engine: {dock_engine} (exhaustiveness {exhaustiveness}); MD engine: {md_engine}.")
+    mode_desc = "dock all -> MD top-%d" % top_k_md if eval_mode == "hybrid" else "dock all -> MD ALL candidates"
+    log(f"Eval mode: {eval_mode} ({mode_desc}); docking engine: {dock_engine} "
+        f"(exhaustiveness {exhaustiveness}); MD engine: {md_engine}.")
 
     try:
         log(f"Preparing target compound ligand from {config['compound_file']}.")
@@ -139,7 +142,7 @@ def run_design(design_id: str, config: Dict[str, Any], reporter, settings: Dict[
         result = ga.run_ga(
             initial, dock_batch, md_batch,
             num_generations=num_generations, population_size=population_size,
-            top_k_md=top_k_md, progress=progress,
+            top_k_md=top_k_md, eval_mode=eval_mode, progress=progress,
         )
         result_dict = ga.result_to_dict(result)
         (workdir / "design_result.json").write_text(json.dumps(result_dict, indent=2))
