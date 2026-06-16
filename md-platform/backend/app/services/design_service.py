@@ -35,6 +35,7 @@ def _runner_settings() -> dict:
     return {
         "STORAGE_ROOT": s.STORAGE_ROOT,
         "MD_ENGINE": s.resolved_md_engine(),
+        "DOCK_ENGINE": s.DOCK_ENGINE,
         "MDP_TEMPLATE_DIR": s.MDP_TEMPLATE_DIR,
         "TRAJECTORY_OUTPUT_PS": s.TRAJECTORY_OUTPUT_PS,
         "PROTEIN_FORCE_FIELD": s.PROTEIN_FORCE_FIELD,

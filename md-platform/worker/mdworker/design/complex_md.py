@@ -11,8 +11,6 @@ elites. Raises on failure so the caller (md_eval) can fall back to the mock esti
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -36,21 +34,50 @@ class _LocalReporter:
             self._log(f"[{level}/{step}] {message}")
 
 
-def _pose_to_pdb(pose_pdbqt: Path, out_pdb: Path) -> Path:
-    """Convert the top docked pose (PDBQT) to PDB for ligand parameterization."""
-    obabel = shutil.which("obabel")
-    if not obabel:
-        raise RuntimeError("obabel not on PATH; cannot convert docked pose to PDB.")
-    out_pdb.parent.mkdir(parents=True, exist_ok=True)
-    if out_pdb.exists():
-        out_pdb.unlink()  # never mistake a stale file for a successful retry
-    # -f 1 -l 1 = first model only (the best-scoring pose).
-    proc = subprocess.run([obabel, str(pose_pdbqt), "-O", str(out_pdb), "-f", "1", "-l", "1"],
-                          capture_output=True, text=True, timeout=120)
-    if proc.returncode != 0 or not out_pdb.exists() or out_pdb.stat().st_size == 0:
-        raise RuntimeError(f"obabel pose->pdb failed (rc={proc.returncode}): "
-                           f"{(proc.stderr or proc.stdout)[-300:]}")
-    return out_pdb
+def _docked_ligand(pose_pdbqt: Path, compound_sdf: str, prep_dir: Path) -> tuple[Path, Path]:
+    """Build a full-atom docked-ligand PDB + clean reference SDF from the Vina pose.
+
+    The Vina pose PDBQT carries only heavy + polar-H atoms (meeko merges nonpolar H), so it
+    cannot be parameterized directly against the full compound. This reuses the SAME VF2
+    bond-order mapping the production pipeline uses (assign_bond_orders): map the pose's heavy
+    atoms onto the chemistry template, AddHs at the pose coordinates → a hydrogen-complete
+    ligand PDB whose atom count matches acpype's topology. Returns (ligand_pdb, lig_ref_sdf).
+    """
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    from mdworker.chem.mapping import load_template_mol, map_pose_to_template, template_formula
+    from mdworker.io.pdbqt import parse_pdbqt_models
+
+    poses = parse_pdbqt_models(str(pose_pdbqt))
+    if not poses:
+        raise RuntimeError(f"No poses parsed from {pose_pdbqt}.")
+    template, err = load_template_mol(chemistry_file=compound_sdf, smiles=None, chem_source="sdf")
+    if template is None:
+        raise RuntimeError(f"Failed to load compound template: {err}")
+    mapped_h, formula, err = map_pose_to_template(poses[0], template=template)
+    if mapped_h is None:
+        raise RuntimeError(f"VF2 bond-order mapping failed for docked pose: {err}")
+    tmpl_formula = template_formula(template)
+    if tmpl_formula and formula != tmpl_formula:
+        raise RuntimeError(f"Docked-pose chemistry mismatch: template {tmpl_formula} vs pose {formula}.")
+
+    prep_dir.mkdir(parents=True, exist_ok=True)
+    ligand_pdb = prep_dir / "docked_ligand.pdb"
+    Chem.MolToPDBFile(mapped_h, str(ligand_pdb))
+    # Clean reference conformer for acpype (matches assign_bond_orders): a fresh H-complete
+    # embed of the template, falling back to the mapped pose if embedding fails.
+    lig_ref = prep_dir / "lig_ref.sdf"
+    ref = Chem.AddHs(Chem.Mol(template))
+    if AllChem.EmbedMolecule(ref, randomSeed=1) == 0:
+        try:
+            AllChem.MMFFOptimizeMolecule(ref)
+        except Exception:  # noqa: BLE001
+            pass
+    else:
+        ref = mapped_h
+    Chem.MolToMolFile(ref, str(lig_ref))
+    return ligand_pdb, lig_ref
 
 
 def run_complex_md(
@@ -104,10 +131,12 @@ def run_complex_md(
     ctx.ensure_dirs()
 
     engine = GromacsEngine(st)
-    ligand_pdb = _pose_to_pdb(Path(pose_pdbqt), ctx.prep_dir / "ligand_pose.pdb")
-    lig_ref = compound_sdf or settings.get("compound_file")
-    if not lig_ref:
+    compound = compound_sdf or settings.get("compound_file")
+    if not compound:
         raise ValueError("compound_sdf/compound_file required to parameterize the ligand.")
+    # Full-atom docked ligand (VF2-mapped to the template) + clean reference conformer, so the
+    # parameterized topology and the assembled complex coordinates have matching atom counts.
+    ligand_pdb, lig_ref = _docked_ligand(Path(pose_pdbqt), str(compound), ctx.prep_dir)
 
     prepared = engine.prepare_structure(ctx, receptor_file=str(peptide_pdb), hetatm_decisions={})
     ligand = engine.parameterize_ligand(ctx, lig_ref_sdf=str(lig_ref), ligand_pdb=str(ligand_pdb),

@@ -53,10 +53,13 @@ def run_design(design_id: str, config: Dict[str, Any], reporter, settings: Dict[
     num_generations = int(config.get("num_generations", 5))
     top_k_md = int(config.get("top_k_md", 2))
     md_length_ns = float(config.get("md_length_ns", 10.0))
-    exhaustiveness = int(config.get("exhaustiveness", 8))
+    exhaustiveness = int(config.get("exhaustiveness", 16))
     md_engine = str(settings.get("MD_ENGINE", "mock")).lower()
     if md_engine == "auto":
         md_engine = "gromacs" if md_eval.gromacs_available() else "mock"
+    # Docking engine: "auto" -> smina (flexible receptor side chains) if installed, else vina.
+    dock_engine = docking.resolve_engine(str(settings.get("DOCK_ENGINE", "auto")))
+    log(f"Docking engine: {dock_engine} (exhaustiveness {exhaustiveness}); MD engine: {md_engine}.")
 
     try:
         log(f"Preparing target compound ligand from {config['compound_file']}.")
@@ -76,7 +79,7 @@ def run_design(design_id: str, config: Dict[str, Any], reporter, settings: Dict[
         with ThreadPoolExecutor(max_workers=_dock_workers(settings)) as ex:
             futs = {
                 ex.submit(docking.dock_peptide_compound, s, ligand_pdbqt, gen_dir,
-                          exhaustiveness=exhaustiveness, n_poses=5): s
+                          engine=dock_engine, exhaustiveness=exhaustiveness, n_poses=5): s
                 for s in seqs
             }
             for fut in as_completed(futs):

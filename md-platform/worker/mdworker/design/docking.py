@@ -39,12 +39,16 @@ def _safe_token(sequence: str) -> str:
 @dataclass
 class DockResult:
     sequence: str
-    score: float                      # best Vina affinity, kcal/mol (negative = better)
+    score: float                      # best affinity, kcal/mol (negative = better)
     pose_pdbqt: Optional[str] = None  # path to the best-pose PDBQT
     receptor_pdbqt: Optional[str] = None
     peptide_pdb: Optional[str] = None
     center: List[float] = field(default_factory=list)
     box_size: List[float] = field(default_factory=list)
+    engine: str = "vina"              # which docking engine produced this score
+    all_scores: List[float] = field(default_factory=list)  # per-pose affinities (best first)
+    top2_gap: Optional[float] = None  # affinity gap between pose 1 and 2 (<~1 ⇒ ambiguous)
+    n_flexres: Optional[int] = None   # flexible receptor side chains used (smina), else None
 
 
 def _require(tool: str) -> str:
@@ -132,8 +136,14 @@ def prepare_receptor(peptide_pdb: Path, out_pdbqt: Path) -> Path:
     return out_pdbqt
 
 
-def _box_from_pdbqt(receptor_pdbqt: Path, margin: float = 8.0):
-    """Blind-docking box: center on the receptor bounding box, size = extent + 2*margin."""
+def _box_from_pdbqt(receptor_pdbqt: Path, margin: float = 8.0, *, seq_len: int = 0):
+    """Blind-docking box: center on the receptor bounding box, size = extent + 2*margin.
+
+    A designed peptide has no predefined pocket, so the box must enclose the whole peptide.
+    The margin scales gently with peptide length (longer chains need wider coverage) and is
+    capped so short peptides aren't over-boxed; the 6 Å floor keeps tiny systems sane.
+    """
+    eff_margin = min(12.0, margin + 0.5 * max(0, seq_len))
     xs, ys, zs = [], [], []
     for line in receptor_pdbqt.read_text(errors="replace").splitlines():
         if line.startswith(("ATOM", "HETATM")) and len(line) >= 54:
@@ -144,8 +154,94 @@ def _box_from_pdbqt(receptor_pdbqt: Path, margin: float = 8.0):
     if not xs:
         raise RuntimeError("Receptor PDBQT has no parseable atom coordinates for box sizing.")
     center = [(min(c) + max(c)) / 2.0 for c in (xs, ys, zs)]
-    size = [max(6.0, (max(c) - min(c)) + 2.0 * margin) for c in (xs, ys, zs)]
+    size = [max(6.0, (max(c) - min(c)) + 2.0 * eff_margin) for c in (xs, ys, zs)]
     return center, size
+
+
+_ENGINES = ("auto", "smina", "vina")
+
+
+def resolve_engine(engine: str) -> str:
+    """Resolve the docking engine. 'auto' -> smina if on PATH else vina; 'smina'/'vina' pass
+    through. Any other value raises (an unknown engine must never silently fall back, which
+    would mislabel DockResult.engine and hide a config typo)."""
+    engine = (engine or "auto").strip().lower()
+    if engine not in _ENGINES:
+        raise ValueError(f"Unknown docking engine {engine!r}; expected one of {_ENGINES}.")
+    if engine == "auto":
+        return "smina" if shutil.which("smina") else "vina"
+    return engine
+
+
+def _dock_vina(receptor_pdbqt: Path, ligand_pdbqt: Path, center, box, pose_path: Path,
+               *, exhaustiveness: int, n_poses: int, cpu: int, seed: int):
+    """Rigid-receptor AutoDock Vina (Python API). Returns (best, all_scores, pose_path)."""
+    from vina import Vina
+
+    v = Vina(sf_name="vina", cpu=max(1, cpu), seed=seed, verbosity=0)
+    v.set_receptor(str(receptor_pdbqt))
+    v.set_ligand_from_file(str(ligand_pdbqt))
+    v.compute_vina_maps(center=list(center), box_size=list(box))
+    v.dock(exhaustiveness=exhaustiveness, n_poses=n_poses)
+    v.write_poses(str(pose_path), n_poses=min(n_poses, 10), overwrite=True)
+    energies = v.energies(n_poses=n_poses)
+    all_scores = [round(float(e[0]), 3) for e in energies] if len(energies) else []
+    best = all_scores[0] if all_scores else float("inf")
+    return best, all_scores, 0
+
+
+def _parse_smina_scores(pose_pdbqt: Path) -> List[float]:
+    """Best-first per-pose affinities from a smina output PDBQT (REMARK minimizedAffinity)."""
+    scores: List[float] = []
+    for line in pose_pdbqt.read_text(errors="replace").splitlines():
+        # smina writes either "REMARK minimizedAffinity <v>" or "REMARK VINA RESULT: <v> ..."
+        if line.startswith("REMARK minimizedAffinity"):
+            try:
+                scores.append(round(float(line.split()[-1]), 3))
+            except (ValueError, IndexError):
+                continue
+        elif line.startswith("REMARK VINA RESULT"):
+            try:
+                scores.append(round(float(line.split(":")[1].split()[0]), 3))
+            except (ValueError, IndexError):
+                continue
+    return scores
+
+
+def _dock_smina(receptor_pdbqt: Path, ligand_pdbqt: Path, center, box, pose_path: Path,
+                *, exhaustiveness: int, n_poses: int, cpu: int, seed: int,
+                flexdist: float, scoring: str = "vina"):
+    """Smina with auto-selected flexible receptor side chains (--flexdist around the ligand).
+
+    Smina shares Vina's scoring function but adds receptor side-chain flexibility and fast
+    local minimization — the two things a designed-peptide receptor needs. Returns
+    (best, all_scores, n_flexres). Parses affinities from the output PDBQT; a parse failure
+    raises (rather than silently returning inf) so a bug can't masquerade as a bad candidate.
+    """
+    smina = _require("smina")
+    if pose_path.exists():
+        pose_path.unlink()
+    cmd = [
+        smina, "-r", str(receptor_pdbqt), "-l", str(ligand_pdbqt),
+        "--center_x", f"{center[0]:.3f}", "--center_y", f"{center[1]:.3f}", "--center_z", f"{center[2]:.3f}",
+        "--size_x", f"{box[0]:.3f}", "--size_y", f"{box[1]:.3f}", "--size_z", f"{box[2]:.3f}",
+        "--exhaustiveness", str(exhaustiveness), "--num_modes", str(n_poses),
+        "--cpu", str(max(1, cpu)), "--seed", str(seed), "--scoring", scoring,
+        "--flexdist_ligand", str(ligand_pdbqt), "--flexdist", f"{flexdist:.2f}",
+        "--out", str(pose_path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    if proc.returncode != 0 or not pose_path.exists() or pose_path.stat().st_size == 0:
+        raise RuntimeError(f"smina failed (rc={proc.returncode}): {(proc.stderr or proc.stdout)[-400:]}")
+    all_scores = _parse_smina_scores(pose_path)
+    if not all_scores:
+        raise RuntimeError(f"smina produced no parseable affinity in {pose_path.name}.")
+    # Count flexible side chains from the flex output if smina wrote one (best-effort).
+    n_flex = None
+    flex_out = pose_path.with_name(pose_path.stem + "_flex.pdbqt")
+    if flex_out.exists():
+        n_flex = sum(1 for ln in flex_out.read_text(errors="replace").splitlines() if ln.startswith("BEGIN_RES"))
+    return all_scores[0], all_scores, n_flex
 
 
 def dock_peptide_compound(
@@ -153,41 +249,45 @@ def dock_peptide_compound(
     ligand_pdbqt: Path,
     workdir: Path,
     *,
+    engine: str = "auto",
     geometry: str = "extended",
-    exhaustiveness: int = 8,
+    exhaustiveness: int = 16,
     n_poses: int = 5,
     margin: float = 8.0,
+    flexdist: float = 3.5,
     cpu: int = 4,
     seed: int = 0,
 ) -> DockResult:
     """Build ``sequence``, dock the (pre-prepared) compound against it, return the best score.
 
-    All per-candidate files are written under ``workdir/<sequence>/`` so that concurrent
-    docking of distinct sequences sharing a ``workdir`` cannot clobber each other's inputs or
-    poses (the GA additionally dedupes identical sequences before dispatch).
+    ``engine``: "smina" (flexible receptor side chains, preferred), "vina" (rigid baseline),
+    or "auto" (smina if on PATH, else vina). Docking is a coarse high-recall pre-screen for the
+    GA; MD + MM/GBSA is the real ranking arbiter. All per-candidate files live under
+    ``workdir/<token(sequence)>/`` so concurrent docking of distinct sequences can't collide.
     """
-    from vina import Vina
-
+    eng = resolve_engine(engine)
     workdir = Path(workdir) / _safe_token(sequence)
     workdir.mkdir(parents=True, exist_ok=True)
     peptide_pdb = build_peptide(sequence, workdir / "peptide.pdb", geometry=geometry)
     receptor_pdbqt = prepare_receptor(peptide_pdb, workdir / "receptor.pdbqt")
-    center, box = _box_from_pdbqt(receptor_pdbqt, margin=margin)
-
-    v = Vina(sf_name="vina", cpu=max(1, cpu), seed=seed, verbosity=0)
-    v.set_receptor(str(receptor_pdbqt))
-    v.set_ligand_from_file(str(ligand_pdbqt))
-    v.compute_vina_maps(center=center, box_size=box)
-    v.dock(exhaustiveness=exhaustiveness, n_poses=n_poses)
-
+    center, box = _box_from_pdbqt(receptor_pdbqt, margin=margin, seq_len=len(sequence.strip()))
     pose_path = workdir / "docked_poses.pdbqt"
-    v.write_poses(str(pose_path), n_poses=min(n_poses, 5), overwrite=True)
-    energies = v.energies(n_poses=n_poses)
-    best = float(energies[0][0]) if len(energies) else float("inf")
 
+    if eng == "smina":
+        best, all_scores, n_flex = _dock_smina(
+            receptor_pdbqt, ligand_pdbqt, center, box, pose_path,
+            exhaustiveness=exhaustiveness, n_poses=n_poses, cpu=cpu, seed=seed, flexdist=flexdist)
+    else:
+        best, all_scores, n_flex = _dock_vina(
+            receptor_pdbqt, ligand_pdbqt, center, box, pose_path,
+            exhaustiveness=exhaustiveness, n_poses=n_poses, cpu=cpu, seed=seed)
+        n_flex = None
+
+    top2_gap = round(all_scores[1] - all_scores[0], 3) if len(all_scores) >= 2 else None
     return DockResult(
-        sequence=sequence, score=round(best, 3),
+        sequence=sequence, score=round(float(best), 3),
         pose_pdbqt=str(pose_path), receptor_pdbqt=str(receptor_pdbqt),
         peptide_pdb=str(peptide_pdb), center=[round(c, 3) for c in center],
-        box_size=[round(s, 3) for s in box],
+        box_size=[round(s, 3) for s in box], engine=eng, all_scores=all_scores,
+        top2_gap=top2_gap, n_flexres=n_flex,
     )
