@@ -317,6 +317,93 @@ class SubJobResultDetail(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Peptide design (GA)
+# ---------------------------------------------------------------------------
+
+
+class DesignJobCreate(BaseModel):
+    """Create a peptide-design GA job. The compound is supplied separately (file upload or
+    SMILES) by the router; this is the JSON config carried alongside it."""
+
+    name: str = Field(min_length=1, max_length=255)
+    initial_sequences: list[str] = Field(min_length=1)   # all must share one length
+    population_size: int = Field(default=10, ge=2, le=200)
+    num_generations: int = Field(default=5, ge=1, le=100)
+    top_k_md: int = Field(default=2, ge=1, le=50)
+    md_length_ns: int = Field(default=10, ge=1, le=1000)
+    exhaustiveness: int = Field(default=8, ge=1, le=64)
+    smiles: str | None = None          # alternative to a compound file upload
+    compound_name: str = "compound"
+
+    @field_validator("initial_sequences")
+    @classmethod
+    def _validate_sequences(cls, seqs: list[str]) -> list[str]:
+        cleaned = [s.strip().upper() for s in seqs if s and s.strip()]
+        if not cleaned:
+            raise ValueError("initial_sequences must contain at least one peptide.")
+        valid_aa = set("ARNDCQEGHILKMFPSTWYV")
+        lengths = {len(s) for s in cleaned}
+        if len(lengths) != 1:
+            raise ValueError(f"All initial sequences must share one length; got lengths {sorted(lengths)}.")
+        for s in cleaned:
+            bad = sorted(set(s) - valid_aa)
+            if bad:
+                raise ValueError(f"Sequence {s!r} has non-standard amino acids: {bad}.")
+        return cleaned
+
+
+class DesignCandidateOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    generation: int
+    sequence: str
+    docking_score: float | None = None
+    md_dg: float | None = None
+    fitness: float = 0.0
+    refined: bool = False
+
+
+class DesignJobOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: int
+    name: str
+    status: str
+    compound_name: str
+    peptide_length: int
+    population_size: int
+    num_generations: int
+    top_k_md: int
+    md_length_ns: int
+    current_generation: int
+    progress: float
+    assigned_gpu: int | None = None
+    best_sequence: str | None = None
+    best_fitness: float | None = None
+    best_docking_score: float | None = None
+    best_md_dg: float | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error_message: str | None = None
+
+
+class DesignGenerationPoint(BaseModel):
+    generation: int
+    best_fitness: float
+    best_sequence: str
+    best_docking_score: float | None = None
+    best_md_dg: float | None = None
+
+
+class DesignJobDetail(BaseModel):
+    job: DesignJobOut
+    candidates: list[DesignCandidateOut] = Field(default_factory=list)   # leaderboard (best first)
+    generations: list[DesignGenerationPoint] = Field(default_factory=list)  # convergence curve
+
+
+# ---------------------------------------------------------------------------
 # Dashboard (§5 Dashboard summary)
 # ---------------------------------------------------------------------------
 

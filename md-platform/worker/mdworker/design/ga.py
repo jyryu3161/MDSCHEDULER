@@ -105,6 +105,9 @@ class HybridEvaluator:
         scored = [s for s in unique if self.cache.get(s) and self.cache[s].docking_score is not None]
         scored.sort(key=lambda s: self.cache[s].docking_score)  # ascending: best first
         elites = [s for s in scored[:self.top_k] if not self.cache[s].refined]
+        # Candidates whose state changed this generation (newly docked OR newly refined) — these
+        # must be (re)persisted so an earlier-seen candidate refined now emits its ΔG/fitness.
+        touched = set(to_dock)
         if elites:
             self._emit(stage="md", generation=generation, n=len(elites), elites=list(elites))
             dgs = self.md_batch(elites, generation) or {}
@@ -115,10 +118,12 @@ class HybridEvaluator:
                     ce.md_dg = float(dg)
                     ce.fitness = -float(dg)   # refined fitness uses MD binding ΔG
                     ce.refined = True
+                    touched.add(s)
 
-        self._record_generation(generation, unique, scored[:self.top_k])
+        self._record_generation(generation, unique, scored[:self.top_k], touched)
 
-    def _record_generation(self, generation: int, evaluated_this_gen: List[str], elites: List[str]) -> None:
+    def _record_generation(self, generation: int, evaluated_this_gen: List[str],
+                           elites: List[str], touched: set) -> None:
         # best-so-far across EVERYTHING evaluated through this generation (the cache retains
         # elites carried over by PyGAD, which the batched fitness func no longer re-passes), so
         # the per-generation curve is the monotonic convergence curve rather than just this
@@ -130,9 +135,18 @@ class HybridEvaluator:
             best_docking_score=best.docking_score, best_md_dg=best.md_dg,
         )
         self._records[generation] = rec  # dedup: one record per generation index
+        # Candidates whose state changed this generation (docked or refined now), each tagged
+        # with its OWN first-seen generation so the caller can upsert without rewriting it.
+        gen_candidates = {
+            s: {"generation": self.cache[s].generation, "docking_score": self.cache[s].docking_score,
+                "md_dg": self.cache[s].md_dg, "fitness": self.cache[s].fitness,
+                "refined": self.cache[s].refined}
+            for s in touched if s in self.cache
+        }
         self._emit(stage="generation_done", generation=generation,
                    best_sequence=best.sequence, best_fitness=best.fitness,
-                   best_docking_score=best.docking_score, best_md_dg=best.md_dg)
+                   best_docking_score=best.docking_score, best_md_dg=best.md_dg,
+                   candidates=gen_candidates)
 
     def fitness_of(self, sequence: str) -> float:
         ce = self.cache.get(sequence)

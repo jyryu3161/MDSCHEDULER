@@ -23,6 +23,7 @@ from .models import ResourceUsage, utcnow
 from .routers import (
     auth,
     dashboard,
+    design,
     events,
     gpus,
     internal,
@@ -165,6 +166,7 @@ def create_app() -> FastAPI:
         queue.router,
         gpus.router,
         dashboard.router,
+        design.router,
         events.router,
         ws.router,
         internal.router,

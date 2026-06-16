@@ -227,6 +227,21 @@ other than `/auth/login` require auth. Admin-only endpoints checked by role.
 - `POST /api/gpus/{gpu_id}/maintenance` admin → GpuStatus.
 - `PATCH /api/gpus/concurrency` admin, body `{pool: "md"|"design", concurrency: 1..16}` → `[GpuStatus]` (sets parallel-MD slots per GPU in the pool; running subjobs are never evicted; persists across restart).
 
+### Peptide design (GA) (§19.6)
+- `POST /api/design` (multipart) → `DesignJob`. Form fields: `name`, `initial_sequences`
+  (comma/space/newline-separated, all one length, standard AAs), `population_size`,
+  `num_generations`, `top_k_md`, `md_length_ns`, `exhaustiveness`, `compound_name`; plus a
+  `compound` file (.sdf/.mol/.mol2/.pdb/.smi) OR a `smiles` string. Runs on the GPU design pool.
+- `GET /api/design` → `[DesignJob]` (own jobs; admin sees all).
+- `GET /api/design/{id}` → `DesignJobDetail` = `{job, candidates[] (leaderboard, fitness desc),
+  generations[] (best-so-far convergence curve)}`.
+- `POST /api/design/{id}/cancel` → `DesignJob` (status cancelled; runner aborts between generations).
+
+GA: fixed-length peptide (= initial length), genes are AA indices 0..19; hybrid evaluation
+per generation — dock ALL candidates (Vina, CPU), MD-refine the top-k by docking score
+(GROMACS+MM/GBSA on the design GPU), fitness = −ΔG for refined elites else −docking_score.
+Tables `designjobs` + `designcandidates`.
+
 ### Results (§19.6)
 - `GET /api/jobs/{job_id}/results` → `{job, subjobs:[{...,analysis_summary, plots_available:[PlotType], has_trajectory, has_movie}]}`.
 - `GET /api/jobs/{job_id}/subjobs/{subjob_id}/results` → subjob result detail incl. analysis summary + pose comparison entry.
