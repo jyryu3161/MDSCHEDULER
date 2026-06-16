@@ -53,7 +53,13 @@ class QueueManager:
                 self._backend = "local"
 
         if self._backend == "local":
-            workers = max(1, self._settings.resolved_num_gpus())
+            # One worker per MD-pool slot (GPUs in the MD pool × parallel-MD concurrency), plus
+            # headroom for design-job orchestrators which run on the design pool.
+            pools = self._settings.resolved_gpu_pools()
+            md_gpus = sum(1 for p in pools.values() if p == "md") or 1
+            design_gpus = sum(1 for p in pools.values() if p == "design")
+            md_slots = md_gpus * self._settings.resolved_md_concurrency()
+            workers = max(1, md_slots + max(1, design_gpus))
             self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="md-local")
 
     @property

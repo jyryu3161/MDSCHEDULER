@@ -52,6 +52,9 @@ JWT_EXPIRE_MINUTES=480
 QUEUE_BACKEND=auto                     # rq | local | auto (auto = rq if REDIS reachable else local)
 INTERNAL_API_TOKEN=internal-worker-token-change-me
 NUM_GPUS=auto                          # auto = detect via nvidia-smi; integer to force
+MD_GPU_IDS=                            # csv GPU ids for the MD pool (empty = all non-design GPUs)
+DESIGN_GPU_IDS=                        # csv GPU ids reserved for peptide design (empty = none)
+MD_GPU_CONCURRENCY=1                   # parallel MD per MD-pool GPU; runtime-adjustable via dashboard
 MD_MOCK_SPEEDUP=2000                   # mock engine: ns of "simulation" per real second
 TRAJECTORY_OUTPUT_PS=100               # default xtc interval
 RETENTION_DAYS=30
@@ -130,8 +133,17 @@ Exactly per PDR §18. Table names lowercase plural.
 | memory_used | float | MiB |
 | memory_total | float | MiB |
 | temperature | float | C |
-| assigned_subjob_id | str nullable | |
+| assigned_subjob_id | str nullable | most-recent claimer (display); occupancy is `running_count` |
+| pool | str | `md` \| `design` \| `excluded` (workload partition; see §1 env) |
+| capacity | int | max concurrent subjobs on this GPU (parallel MD); default 1 |
+| running_count | int | slots currently in use (0..capacity); authoritative occupancy |
 | updated_at | datetime | |
+
+GPU claim/release is slot-counted: a GPU is claimable while `running_count < capacity` and not
+admin-blocked. `request_gpu(subjob_id, pool)` atomically takes a slot on the least-loaded GPU
+in `pool` and binds it to the subjob (`SubJob.assigned_gpu`); release decrements only when it
+clears that binding, so duplicate/concurrent calls cannot double-count. `excluded` GPUs are
+never scheduled.
 
 ### joblogs
 | col | type | notes |
@@ -213,6 +225,7 @@ other than `/auth/login` require auth. Admin-only endpoints checked by role.
 - `POST /api/gpus/{gpu_id}/enable` admin → GpuStatus.
 - `POST /api/gpus/{gpu_id}/disable` admin → GpuStatus.
 - `POST /api/gpus/{gpu_id}/maintenance` admin → GpuStatus.
+- `PATCH /api/gpus/concurrency` admin, body `{pool: "md"|"design", concurrency: 1..16}` → `[GpuStatus]` (sets parallel-MD slots per GPU in the pool; running subjobs are never evicted; persists across restart).
 
 ### Results (§19.6)
 - `GET /api/jobs/{job_id}/results` → `{job, subjobs:[{...,analysis_summary, plots_available:[PlotType], has_trajectory, has_movie}]}`.

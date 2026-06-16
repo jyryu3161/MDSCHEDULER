@@ -260,6 +260,9 @@ class GpuStatusOut(BaseModel):
     memory_total: float
     temperature: float
     assigned_subjob_id: str | None = None
+    pool: Literal["md", "design", "excluded"] = "md"
+    capacity: int = Field(default=1, ge=0)          # max concurrent subjobs on this GPU
+    running_count: int = Field(default=0, ge=0)     # slots currently in use (0..capacity)
     updated_at: datetime
 
 

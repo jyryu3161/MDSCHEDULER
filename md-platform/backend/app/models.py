@@ -89,6 +89,16 @@ class GpuStatusEnum:
     ALL = (AVAILABLE, BUSY, DISABLED, MAINTENANCE, ERROR)
 
 
+class GpuPool:
+    """Which workload a GPU is reserved for (CONTRACT §2 gpustatus.pool)."""
+
+    MD = "md"             # regular docking-result MD jobs
+    DESIGN = "design"     # peptide-design (GA) MD evaluations
+    EXCLUDED = "excluded"  # unmanaged — left free for other use, never scheduled
+
+    ALL = (MD, DESIGN, EXCLUDED)
+
+
 class LigandType:
     SMALL_MOLECULE = "small_molecule"
     PEPTIDE = "peptide"
@@ -228,6 +238,12 @@ class GpuStatus(Base):
     memory_total: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     temperature: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     assigned_subjob_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Pool the GPU is reserved for ("md" | "design" | "excluded"); see GpuPool.
+    pool: Mapped[str] = mapped_column(String(16), default=GpuPool.MD, nullable=False, index=True)
+    # How many subjobs may run on this GPU at once (parallel MD); 1 = exclusive.
+    capacity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # Authoritative count of subjobs currently occupying a slot on this GPU (0..capacity).
+    running_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
 
