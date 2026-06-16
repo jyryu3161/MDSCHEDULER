@@ -57,8 +57,9 @@ def run_design(design_id: str, config: Dict[str, Any], reporter, settings: Dict[
     md_engine = str(settings.get("MD_ENGINE", "mock")).lower()
     if md_engine == "auto":
         md_engine = "gromacs" if md_eval.gromacs_available() else "mock"
-    # Docking engine: "auto" -> smina (flexible receptor side chains) if installed, else vina.
-    dock_engine = docking.resolve_engine(str(settings.get("DOCK_ENGINE", "auto")))
+    # Docking engine: default "vina" (AutoDock Vina 1.2.7, rigid); set DOCK_ENGINE=smina for
+    # flexible receptor side chains, or "auto" to use smina when installed.
+    dock_engine = docking.resolve_engine(str(settings.get("DOCK_ENGINE", "vina")))
     log(f"Docking engine: {dock_engine} (exhaustiveness {exhaustiveness}); MD engine: {md_engine}.")
 
     try:

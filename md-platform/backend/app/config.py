@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     GPU_ASSIGNMENT_MODE: str = "one_job_per_gpu"
 
     MD_ENGINE: str = "auto"  # gromacs | mock | auto
-    DOCK_ENGINE: str = "auto"  # peptide-design docking: smina | vina | auto (smina if installed)
+    DOCK_ENGINE: str = "vina"  # peptide-design docking: vina (default, AutoDock Vina 1.2.7, rigid) | smina (flexible side chains) | auto
     PROTEIN_FORCE_FIELD: str = "amber14sb"
     LIGAND_FORCE_FIELD: str = "gaff2"
     LIGAND_CHARGE_METHOD: str = "am1bcc"

@@ -55,7 +55,7 @@ NUM_GPUS=auto                          # auto = detect via nvidia-smi; integer t
 MD_GPU_IDS=                            # csv GPU ids for the MD pool (empty = all non-design GPUs)
 DESIGN_GPU_IDS=                        # csv GPU ids reserved for peptide design (empty = none)
 MD_GPU_CONCURRENCY=1                   # parallel MD per MD-pool GPU; runtime-adjustable via dashboard
-DOCK_ENGINE=auto                       # peptide-design docking: smina | vina | auto (smina if installed)
+DOCK_ENGINE=vina                       # peptide-design docking: vina (default, rigid AutoDock Vina 1.2.7) | smina (flexible side chains) | auto
 MD_MOCK_SPEEDUP=2000                   # mock engine: ns of "simulation" per real second
 TRAJECTORY_OUTPUT_PS=100               # default xtc interval
 RETENTION_DAYS=30
@@ -243,11 +243,12 @@ per generation — dock ALL candidates, MD-refine the top-k by docking score (GR
 on the design GPU), fitness = −ΔG for refined elites else −docking_score.
 Tables `designjobs` + `designcandidates`.
 
-Docking engine (DOCK_ENGINE: smina | vina | auto): **Smina** primary (Vina scoring + flexible
-receptor side chains), **Vina** baseline/fallback; `auto` = smina if installed else vina. The
-peptide is the RECEPTOR, the SMILES compound the LIGAND. Docking is a COARSE pre-screen; MD +
-MM/GBSA is the real ranking arbiter. (Implementation params — box/exhaustiveness/prep — live in
-`worker/mdworker/design/docking.py`.)
+Docking engine (DOCK_ENGINE: vina | smina | auto): **Vina** is the DEFAULT (AutoDock Vina
+1.2.7, rigid receptor, deterministic); **Smina** is opt-in (`DOCK_ENGINE=smina`) and adds
+flexible receptor side chains (Vina-1.1.2-core scoring + `--flexdist`); `auto` = smina if
+installed else vina. The peptide is the RECEPTOR, the SMILES compound the LIGAND. Docking is a
+COARSE pre-screen; MD + MM/GBSA is the real ranking arbiter. (Implementation params —
+box/exhaustiveness/prep — live in `worker/mdworker/design/docking.py`.)
 
 ### Results (§19.6)
 - `GET /api/jobs/{job_id}/results` → `{job, subjobs:[{...,analysis_summary, plots_available:[PlotType], has_trajectory, has_movie}]}`.

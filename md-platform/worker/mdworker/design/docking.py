@@ -249,7 +249,7 @@ def dock_peptide_compound(
     ligand_pdbqt: Path,
     workdir: Path,
     *,
-    engine: str = "auto",
+    engine: str = "vina",
     geometry: str = "extended",
     exhaustiveness: int = 16,
     n_poses: int = 5,
@@ -260,10 +260,11 @@ def dock_peptide_compound(
 ) -> DockResult:
     """Build ``sequence``, dock the (pre-prepared) compound against it, return the best score.
 
-    ``engine``: "smina" (flexible receptor side chains, preferred), "vina" (rigid baseline),
-    or "auto" (smina if on PATH, else vina). Docking is a coarse high-recall pre-screen for the
-    GA; MD + MM/GBSA is the real ranking arbiter. All per-candidate files live under
-    ``workdir/<token(sequence)>/`` so concurrent docking of distinct sequences can't collide.
+    ``engine``: "vina" (DEFAULT — AutoDock Vina 1.2.7, rigid receptor, deterministic), "smina"
+    (opt-in — adds flexible receptor side chains via --flexdist), or "auto" (smina if on PATH,
+    else vina). Docking is a coarse high-recall pre-screen for the GA; MD + MM/GBSA is the real
+    ranking arbiter. All per-candidate files live under ``workdir/<token(sequence)>/`` so
+    concurrent docking of distinct sequences can't collide.
     """
     eng = resolve_engine(engine)
     workdir = Path(workdir) / _safe_token(sequence)
