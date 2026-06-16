@@ -15,6 +15,8 @@ import { Upload } from "./pages/Upload";
 import { JobDetail } from "./pages/JobDetail";
 import { Results } from "./pages/Results";
 import { Admin } from "./pages/Admin";
+import { DesignDashboard } from "./pages/DesignDashboard";
+import { DesignDetail } from "./pages/DesignDetail";
 
 export default function App() {
   return (
@@ -31,6 +33,8 @@ export default function App() {
         }
       >
         <Route path="/" element={<Dashboard />} />
+        <Route path="/design" element={<DesignDashboard />} />
+        <Route path="/design/:designId" element={<DesignDetail />} />
         <Route path="/upload" element={<Upload />} />
         <Route path="/jobs/:jobId" element={<JobDetail />} />
         <Route path="/jobs/:jobId/results" element={<Results />} />
