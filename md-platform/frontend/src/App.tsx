@@ -10,6 +10,7 @@ import { Layout } from "./components";
 //   src/pages/Results.tsx   export function Results()    -> /jobs/:jobId/results
 //   src/pages/Admin.tsx     export function Admin()      -> /admin
 import { Login } from "./pages/Login";
+import { Overview } from "./pages/Overview";
 import { Dashboard } from "./pages/Dashboard";
 import { Upload } from "./pages/Upload";
 import { JobDetail } from "./pages/JobDetail";
@@ -32,7 +33,8 @@ export default function App() {
           </RequireAuth>
         }
       >
-        <Route path="/" element={<Dashboard />} />
+        <Route path="/" element={<Overview />} />
+        <Route path="/md" element={<Dashboard />} />
         <Route path="/design" element={<DesignDashboard />} />
         <Route path="/design/:designId" element={<DesignDetail />} />
         <Route path="/upload" element={<Upload />} />

@@ -11,7 +11,6 @@ import {
 import { useAuth } from "../auth";
 import { Card, ErrorBanner, ProgressBar, StatCard } from "../components/ui";
 import { DataTable, type Column } from "../components/DataTable";
-import { DashboardTabs } from "../components/DashboardTabs";
 import { GpuStatusBadge, JobStatusBadge } from "../components/StatusBadge";
 import { formatDuration, formatGb, formatNumber, formatRelative } from "../format";
 import type {
@@ -284,18 +283,24 @@ export function Dashboard() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-slate-900">Dashboard</h1>
-        <span
-          className={`badge ${
-            live ? "bg-green-100 text-green-700" : "bg-slate-200 text-slate-600"
-          }`}
-          title={live ? "Live updates via server-sent events" : "Polling every 5s"}
-        >
-          {live ? "Live" : "Polling"}
-        </span>
+        <h1 className="text-xl font-semibold text-slate-900">MD</h1>
+        <div className="flex items-center gap-3">
+          <span
+            className={`badge ${
+              live ? "bg-green-100 text-green-700" : "bg-slate-200 text-slate-600"
+            }`}
+            title={live ? "Live updates via server-sent events" : "Polling every 5s"}
+          >
+            {live ? "Live" : "Polling"}
+          </span>
+          <Link
+            to="/upload"
+            className="rounded-md bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
+          >
+            New MD Job
+          </Link>
+        </div>
       </div>
-
-      <DashboardTabs />
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 

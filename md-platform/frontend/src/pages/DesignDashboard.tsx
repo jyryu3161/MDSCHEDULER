@@ -12,7 +12,6 @@ import {
   Spinner,
   type Column,
 } from "../components";
-import { DashboardTabs } from "../components/DashboardTabs";
 import type { DesignDockEngine, DesignEvalMode, DesignJob, GpuStatus } from "../types";
 
 const POLL_MS = 4000;
@@ -77,9 +76,8 @@ export function DesignDashboard() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-slate-900">Dashboard</h1>
+        <h1 className="text-xl font-semibold text-slate-900">Peptide Design</h1>
       </div>
-      <DashboardTabs />
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
