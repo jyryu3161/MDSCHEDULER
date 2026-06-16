@@ -139,6 +139,14 @@ def seed_gpus(db: Session) -> None:
             # (re)initializes capacity when a GPU is newly in the MD pool; design/excluded
             # GPUs are always capacity 1.
             old_pool = row.pool
+            if old_pool != pool and row.running_count > 0:
+                # Reassigning a pool while the GPU still holds slots: reconcile's min(n,capacity)
+                # clamp can hide an active subjob if the new pool's capacity is smaller. Warn so
+                # the operator knows to drain the GPU before changing DESIGN_GPU_IDS/MD_GPU_IDS.
+                import logging
+                logging.getLogger("mdplatform.backend").warning(
+                    "GPU %d moved %s->%s while running_count=%d; drain it before reassigning pools "
+                    "to avoid slot-count drift.", gid, old_pool, pool, row.running_count)
             row.pool = pool
             if pool == GpuPool.MD:
                 if old_pool != GpuPool.MD:
@@ -297,7 +305,7 @@ def _decrement_slot(db: Session, gpu_id: int) -> None:
     )
 
 
-def release_gpu(db: Session, subjob_id: str) -> bool:
+def release_gpu(db: Session, subjob_id: str, *, commit: bool = True) -> bool:
     """Free the slot held by ``subjob_id`` on its GPU. Returns True if a slot was freed.
 
     The subjob's ``assigned_gpu`` (set atomically at claim time) is the source of truth. The
@@ -305,7 +313,15 @@ def release_gpu(db: Session, subjob_id: str) -> bool:
     decremented ONLY when that clear affects exactly one row, so concurrent/duplicate releases
     cannot double-decrement. Falls back to the legacy ``assigned_subjob_id`` marker for rows
     claimed without a SubJob.
+
+    ``commit=False`` performs the release WITHOUT committing, so it can participate in a caller's
+    larger transaction (e.g. cancel/retry releasing several subjobs atomically); the caller then
+    commits once.
     """
+    def _flush() -> None:
+        if commit:
+            db.commit()
+
     sub = db.get(SubJob, subjob_id)
     gid = sub.assigned_gpu if sub is not None else None
     if gid is not None:
@@ -315,13 +331,13 @@ def release_gpu(db: Session, subjob_id: str) -> bool:
             .values(assigned_gpu=None)
         )
         if cleared.rowcount != 1:
-            db.commit()  # someone already released it
+            _flush()  # someone already released it
             return False
         _decrement_slot(db, gid)
         db.execute(update(GpuStatus).where(GpuStatus.gpu_id == gid,
                                            GpuStatus.assigned_subjob_id == subjob_id)
                    .values(assigned_subjob_id=None))
-        db.commit()
+        _flush()
         return True
 
     # Legacy single-occupancy fallback: claim the clear via the marker, then decrement.
@@ -336,10 +352,10 @@ def release_gpu(db: Session, subjob_id: str) -> bool:
         .values(assigned_subjob_id=None)
     )
     if cleared.rowcount != 1:
-        db.commit()
+        _flush()
         return False
     _decrement_slot(db, legacy_gid)
-    db.commit()
+    _flush()
     return True
 
 

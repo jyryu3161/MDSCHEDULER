@@ -122,5 +122,35 @@ def test_cancel_design(client):
     assert c.status_code == 200 and c.json()["status"] == "cancelled"
 
 
+def _make_user(username: str, password: str) -> None:
+    from app.models import User
+    from app.security import hash_password
+    db = SessionLocal()
+    try:
+        if db.query(User).filter(User.username == username).first() is None:
+            db.add(User(username=username, password_hash=hash_password(password),
+                        role="user", is_active=True, must_change_password=False))
+            db.commit()
+    finally:
+        db.close()
+
+
+def test_design_list_scoping_admin_sees_all(client):
+    admin = _auth(client)  # seeded admin "csbl"
+    _make_user("designer_bob", "bobpass-1")
+    tok = client.post("/api/auth/login",
+                      json={"username": "designer_bob", "password": "bobpass-1"}).json()["access_token"]
+    bob = {"Authorization": f"Bearer {tok}"}
+    bob_design = client.post("/api/design", headers=bob,
+                             data={"name": "bob run", "initial_sequences": "KCCIVYP", "smiles": "C"}).json()["id"]
+
+    # Bob sees his own design; admin sees Bob's design too (admin-sees-all scoping)
+    assert any(d["id"] == bob_design for d in client.get("/api/design", headers=bob).json())
+    admin_ids = {d["id"] for d in client.get("/api/design", headers=admin).json()}
+    assert bob_design in admin_ids
+    # Bob can fetch his own design detail
+    assert client.get(f"/api/design/{bob_design}", headers=bob).status_code == 200
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

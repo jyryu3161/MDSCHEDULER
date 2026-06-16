@@ -77,10 +77,12 @@ def prepare_ligand(compound: str, out_pdbqt: Path) -> Path:
     mol = Chem.AddHs(mol)
     params = AllChem.ETKDGv3()
     params.randomSeed = 0xC0FFEE
-    if AllChem.EmbedMolecule(mol, params) != 0:
+    # EmbedMolecule returns a conformer id (>= 0) on success and -1 on failure, so the failure
+    # test is "< 0" (not "!= 0", which would wrongly treat a non-zero conformer id as failure).
+    if AllChem.EmbedMolecule(mol, params) < 0:
         # Retry with random coords as a fallback for awkward molecules.
         params.useRandomCoords = True
-        if AllChem.EmbedMolecule(mol, params) != 0:
+        if AllChem.EmbedMolecule(mol, params) < 0:
             raise RuntimeError("RDKit failed to embed a 3D conformer for the compound.")
     try:
         AllChem.MMFFOptimizeMolecule(mol)
@@ -91,6 +93,10 @@ def prepare_ligand(compound: str, out_pdbqt: Path) -> Path:
     w = Chem.SDWriter(str(sdf3d))
     w.write(mol)
     w.close()
+    # Validate the intermediate SDF before handing it to Meeko, so an incomplete RDKit write
+    # surfaces here rather than as a cryptic meeko failure (mirrors prepare_receptor's guard).
+    if not sdf3d.exists() or sdf3d.stat().st_size == 0:
+        raise RuntimeError(f"RDKit SDF output failed or empty: {sdf3d}")
 
     mk = _require("mk_prepare_ligand.py")
     proc = subprocess.run([mk, "-i", str(sdf3d), "-o", str(out_pdbqt)],
@@ -186,12 +192,21 @@ def _dock_vina(receptor_pdbqt: Path, ligand_pdbqt: Path, center, box, pose_path:
     v.write_poses(str(pose_path), n_poses=min(n_poses, 10), overwrite=True)
     energies = v.energies(n_poses=n_poses)
     all_scores = [round(float(e[0]), 3) for e in energies] if len(energies) else []
-    best = all_scores[0] if all_scores else float("inf")
+    # Raise rather than return inf when Vina finds no poses, matching _dock_smina: a docking
+    # failure must surface (caller maps it to a failed candidate), never masquerade as a score.
+    if not all_scores:
+        raise RuntimeError("Vina produced no poses with energies.")
+    best = all_scores[0]
     return best, all_scores, 0
 
 
 def _parse_smina_scores(pose_pdbqt: Path) -> List[float]:
-    """Best-first per-pose affinities from a smina output PDBQT (REMARK minimizedAffinity)."""
+    """Best-first per-pose affinities from a smina output PDBQT (REMARK minimizedAffinity).
+
+    An affinity-prefixed REMARK that fails to parse is treated as corruption and RAISES (each
+    pose carries exactly one such line, so a malformed one means a partial/garbled output that
+    must not silently shorten the score list). Non-affinity REMARK lines are ignored.
+    """
     scores: List[float] = []
     for line in pose_pdbqt.read_text(errors="replace").splitlines():
         # smina writes either "REMARK minimizedAffinity <v>" or "REMARK VINA RESULT: <v> ..."
@@ -199,12 +214,12 @@ def _parse_smina_scores(pose_pdbqt: Path) -> List[float]:
             try:
                 scores.append(round(float(line.split()[-1]), 3))
             except (ValueError, IndexError):
-                continue
+                raise RuntimeError(f"Malformed smina affinity line: {line!r}")
         elif line.startswith("REMARK VINA RESULT"):
             try:
                 scores.append(round(float(line.split(":")[1].split()[0]), 3))
             except (ValueError, IndexError):
-                continue
+                raise RuntimeError(f"Malformed smina VINA RESULT line: {line!r}")
     return scores
 
 

@@ -332,8 +332,9 @@ class DesignJobCreate(BaseModel):
     top_k_md: int = Field(default=2, ge=1, le=50)
     md_length_ns: int = Field(default=10, ge=1, le=1000)
     exhaustiveness: int = Field(default=8, ge=1, le=64)
-    smiles: str | None = None          # alternative to a compound file upload
-    compound_name: str = "compound"
+    # SMILES is written to disk as compound.smi; cap it so it can't bypass the upload size limit.
+    smiles: str | None = Field(default=None, max_length=10000)
+    compound_name: str = Field(default="compound", max_length=255)  # matches DB String(255)
 
     @field_validator("initial_sequences")
     @classmethod

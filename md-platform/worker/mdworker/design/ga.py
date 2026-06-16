@@ -199,6 +199,10 @@ def run_ga(
         return [evaluator.fitness_of(s) for s in seqs]
 
     parents = num_parents_mating or max(2, population_size // 2)
+    # keep_elitism must stay BELOW num_parents_mating (and population_size): PyGAD stops evolving
+    # after generation 0 when keep_elitism >= num_parents_mating, which silently reduces a small
+    # population (e.g. pop=2 -> parents=2) to a single-generation run. Clamp accordingly.
+    elitism = max(0, min(keep_elitism, parents - 1, population_size - 1))
     ga = pygad.GA(
         num_generations=num_generations,
         num_parents_mating=parents,
@@ -211,7 +215,7 @@ def run_ga(
         mutation_percent_genes=mutation_percent_genes,
         crossover_type="single_point",
         parent_selection_type="tournament",
-        keep_elitism=min(keep_elitism, population_size),
+        keep_elitism=elitism,
         random_seed=random_seed,
         suppress_warnings=True,
     )

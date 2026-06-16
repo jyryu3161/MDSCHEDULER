@@ -30,6 +30,7 @@ export function DesignDashboard() {
       if (!mounted.current) return;
       setJobs(j);
       setGpus(g);
+      setError(null); // a successful refresh clears a stale error banner from a prior failure
     } catch (err) {
       if (mounted.current) setError(normalizeError(err).message);
     }
@@ -139,6 +140,27 @@ function CreateDesignForm({ onCreated }: { onCreated: () => void }) {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    // Client-side validation mirroring the backend (DesignJobCreate) so users get immediate,
+    // friendly feedback instead of a post-submit 422.
+    const seqs = sequences.split(/[\s,]+/).map((s) => s.trim().toUpperCase()).filter(Boolean);
+    if (seqs.length === 0) {
+      setError("Enter at least one initial peptide sequence.");
+      return;
+    }
+    const lengths = new Set(seqs.map((s) => s.length));
+    if (lengths.size !== 1) {
+      setError(`All peptide sequences must have the same length (got lengths ${[...lengths].sort((a, b) => a - b).join(", ")}).`);
+      return;
+    }
+    const badAa = seqs.find((s) => /[^ARNDCQEGHILKMFPSTWYV]/.test(s));
+    if (badAa) {
+      setError(`Sequence "${badAa}" contains non-standard amino acids (use the 20 standard one-letter codes).`);
+      return;
+    }
+    if (!compound && !smiles.trim()) {
+      setError("Provide a target compound: a SMILES string or a structure file.");
+      return;
+    }
     setSubmitting(true);
     try {
       const job = await designApi.create({

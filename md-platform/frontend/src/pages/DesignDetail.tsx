@@ -72,19 +72,25 @@ export function DesignDetail() {
   const figure = useMemo<PlotlyFigure | null>(() => {
     if (!detail || detail.generations.length === 0) return null;
     const gens = detail.generations.map((p) => p.generation);
+    const hasMdData = detail.generations.some((p) => p.best_md_dg != null);
+    const data: PlotlyFigure["data"] = [
+      {
+        x: gens, y: detail.generations.map((p) => p.best_fitness),
+        type: "scatter", mode: "lines+markers", name: "Best fitness (−ΔG / −dock)",
+        line: { color: "#2563eb" },
+      },
+    ];
+    // Only show the MM/GBSA ΔG trace once at least one generation has an MD-refined value,
+    // otherwise it renders as an invisible all-null line with a misleading legend entry.
+    if (hasMdData) {
+      data.push({
+        x: gens, y: detail.generations.map((p) => p.best_md_dg),
+        type: "scatter", mode: "lines+markers", name: "Best MM/GBSA ΔG",
+        line: { color: "#16a34a", dash: "dot" }, connectgaps: true,
+      });
+    }
     return {
-      data: [
-        {
-          x: gens, y: detail.generations.map((p) => p.best_fitness),
-          type: "scatter", mode: "lines+markers", name: "Best fitness (−ΔG / −dock)",
-          line: { color: "#2563eb" },
-        },
-        {
-          x: gens, y: detail.generations.map((p) => p.best_md_dg),
-          type: "scatter", mode: "lines+markers", name: "Best MM/GBSA ΔG",
-          line: { color: "#16a34a", dash: "dot" }, connectgaps: true,
-        },
-      ],
+      data,
       layout: {
         xaxis: { title: { text: "Generation" }, dtick: 1 },
         yaxis: { title: { text: "kcal/mol (fitness = −energy)" } },

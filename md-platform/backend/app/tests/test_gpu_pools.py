@@ -139,5 +139,77 @@ def test_runtime_concurrency_change_and_survives_reseed():
     assert all(r.capacity == 3 for r in G.list_gpus(db) if r.pool == GpuPool.MD)
 
 
+def test_capacity_lowered_below_running_count_stays_full():
+    db = _fresh_db()
+    # Fill BOTH MD GPUs to capacity 2 (4 claims spread 2+2 deterministically by least-loaded).
+    for s in ("s0", "s1", "s2", "s3"):
+        assert G.request_gpu(db, s, pool=GpuPool.MD) in (0, 1)
+    md = [r for r in G.list_gpus(db) if r.pool == GpuPool.MD]
+    assert all(r.running_count == 2 for r in md)
+    # Lower capacity below running_count -> never evicts; stays BUSY; rejects new claims.
+    G.set_pool_capacity(db, GpuPool.MD, 1)
+    md = [r for r in G.list_gpus(db) if r.pool == GpuPool.MD]
+    assert all(r.running_count == 2 and r.capacity == 1 and r.status == "busy" for r in md)
+    assert G.request_gpu(db, "s4", pool=GpuPool.MD) is None   # pool full despite cap<rc
+
+
+def test_reconcile_stale_slots_capped_at_capacity():
+    db = _fresh_db()
+    from app.models import JobStatus as JS, SubJob
+    # Pin 3 active subjobs to gpu0 (capacity 2) and force a drifted running_count, then reconcile.
+    for s in ("s0", "s1", "s2"):
+        sj = db.get(SubJob, s)
+        sj.assigned_gpu = 0
+        sj.status = JS.RUNNING_MD
+    row = next(r for r in G.list_gpus(db) if r.gpu_id == 0)
+    row.running_count = 5  # simulate drift from a crashed worker
+    db.commit()
+    G.reconcile_running_counts(db)
+    row = next(r for r in G.list_gpus(db) if r.gpu_id == 0)
+    # recomputed from the 3 active subjobs, capped at capacity 2
+    assert row.running_count == 2 and row.status == "busy"
+
+
+def test_release_legacy_marker_path():
+    db = _fresh_db()
+    # Claim WITHOUT a SubJob row (legacy marker path): request_gpu for an id with no SubJob.
+    gid = G.request_gpu(db, "no-such-subjob", pool=GpuPool.MD)
+    assert gid is not None
+    row = next(r for r in G.list_gpus(db) if r.gpu_id == gid)
+    assert row.running_count == 1 and row.assigned_subjob_id == "no-such-subjob"
+    assert G.release_gpu(db, "no-such-subjob") is True       # legacy decrement
+    assert G.release_gpu(db, "no-such-subjob") is False      # no double-free
+    row = next(r for r in G.list_gpus(db) if r.gpu_id == gid)
+    assert row.running_count == 0 and row.assigned_subjob_id is None
+
+
+def test_cancel_job_releases_gpu_slots():
+    db = _fresh_db()
+    from app.models import Job
+    from app.services import jobs_service
+    G.request_gpu(db, "s0", pool=GpuPool.MD)
+    G.request_gpu(db, "s1", pool=GpuPool.MD)
+    assert sum(r.running_count for r in G.list_gpus(db)) == 2
+    job = db.get(Job, "j1")
+    jobs_service.cancel_job(db, job)
+    assert sum(r.running_count for r in G.list_gpus(db)) == 0   # no slot leak on cancel
+    assert all(r.status != "busy" for r in G.list_gpus(db) if r.pool == GpuPool.MD)
+
+
+def test_retry_job_releases_gpu_slots():
+    db = _fresh_db()
+    from app.models import Job, JobStatus as JS, SubJob
+    from app.services import jobs_service
+    # mark s0/s1 failed, holding GPUs, then retry -> slots freed, requeued
+    for s in ("s0", "s1"):
+        G.request_gpu(db, s, pool=GpuPool.MD)
+        db.get(SubJob, s).status = JS.FAILED
+    db.commit()
+    assert sum(r.running_count for r in G.list_gpus(db)) == 2
+    jobs_service.retry_job(db, db.get(Job, "j1"))
+    assert sum(r.running_count for r in G.list_gpus(db)) == 0   # no slot leak on retry
+    assert db.get(SubJob, "s0").assigned_gpu is None and db.get(SubJob, "s0").status == JS.QUEUED
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

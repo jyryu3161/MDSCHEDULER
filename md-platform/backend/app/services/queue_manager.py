@@ -90,9 +90,12 @@ class QueueManager:
         if self._executor is not None:
             self._executor.submit(self._run_design_local, design_id)
             return
+        # Lazily create the single-worker design executor under the lock (double-checked) so
+        # concurrent requests can't each build one and break the single-worker serialization.
         if self._design_executor is None:
-            # Single worker: serialize design jobs so they don't contend for the design-pool GPU.
-            self._design_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="design")
+            with self._lock:
+                if self._design_executor is None:
+                    self._design_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="design")
         self._design_executor.submit(self._run_design_local, design_id)
 
     def _run_design_local(self, design_id: str) -> None:

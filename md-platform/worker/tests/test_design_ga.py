@@ -97,6 +97,16 @@ def test_failed_docking_does_not_crash_and_is_deselected():
     assert res.best_sequence != bad
 
 
+def test_small_population_runs_multiple_generations():
+    # Regression for the keep_elitism>=num_parents_mating trap: at pop=2 PyGAD would otherwise
+    # stop after generation 0. The clamp must keep evolving across all requested generations.
+    dock, md, _, _ = _landscape()
+    res = GA.run_ga(["AC", "GG"], dock, md, num_generations=4, population_size=2,
+                    top_k_md=1, keep_elitism=2, random_seed=5)
+    gens = [g.generation for g in res.generations]
+    assert max(gens) >= 3, f"GA stopped early — only saw generations {gens}"
+
+
 def test_mixed_length_initial_sequences_rejected():
     dock, md, _, _ = _landscape()
     with pytest.raises(ValueError):

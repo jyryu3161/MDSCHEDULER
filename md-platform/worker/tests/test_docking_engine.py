@@ -69,6 +69,28 @@ def test_parse_smina_scores_vina_result_format(tmp_path):
     assert D._parse_smina_scores(out) == [-8.2, -7.0]
 
 
+def test_parse_smina_scores_raises_on_malformed_affinity(tmp_path):
+    # A malformed affinity-prefixed REMARK is corruption, not a skippable line -> must raise,
+    # so a partial/garbled score list can't silently feed the GA.
+    out = tmp_path / "poses.pdbqt"
+    out.write_text(
+        "MODEL 1\nREMARK minimizedAffinity -7.30\nENDMDL\n"
+        "MODEL 2\nREMARK minimizedAffinity NOT_A_NUMBER\nENDMDL\n"
+    )
+    with pytest.raises(RuntimeError):
+        D._parse_smina_scores(out)
+
+
+def test_parse_smina_scores_ignores_nonaffinity_remarks(tmp_path):
+    # Non-affinity REMARK lines (SMILES, Name, etc.) are normal and must NOT raise.
+    out = tmp_path / "poses.pdbqt"
+    out.write_text(
+        "REMARK SMILES CC(=O)O\nREMARK  Name = lig\n"
+        "MODEL 1\nREMARK minimizedAffinity -6.10\nENDMDL\n"
+    )
+    assert D._parse_smina_scores(out) == [-6.1]
+
+
 def test_safe_token_sanitizes_path_chars():
     # path separators / traversal must not survive into the workdir segment
     t = D._safe_token("../../etc/passwd")

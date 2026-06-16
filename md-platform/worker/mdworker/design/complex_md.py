@@ -34,7 +34,8 @@ class _LocalReporter:
             self._log(f"[{level}/{step}] {message}")
 
 
-def _docked_ligand(pose_pdbqt: Path, compound_sdf: str, prep_dir: Path) -> tuple[Path, Path]:
+def _docked_ligand(pose_pdbqt: Path, compound_sdf: str, prep_dir: Path,
+                   log: Optional[Callable[[str], None]] = None) -> tuple[Path, Path]:
     """Build a full-atom docked-ligand PDB + clean reference SDF from the Vina pose.
 
     The Vina pose PDBQT carries only heavy + polar-H atoms (meeko merges nonpolar H), so it
@@ -69,12 +70,16 @@ def _docked_ligand(pose_pdbqt: Path, compound_sdf: str, prep_dir: Path) -> tuple
     # embed of the template, falling back to the mapped pose if embedding fails.
     lig_ref = prep_dir / "lig_ref.sdf"
     ref = Chem.AddHs(Chem.Mol(template))
-    if AllChem.EmbedMolecule(ref, randomSeed=1) == 0:
+    # EmbedMolecule returns a conformer id (>= 0) on success, -1 on failure; only a genuine
+    # failure (< 0) should fall back to the docked-pose geometry, which we surface (not silent).
+    if AllChem.EmbedMolecule(ref, randomSeed=1) >= 0:
         try:
             AllChem.MMFFOptimizeMolecule(ref)
         except Exception:  # noqa: BLE001
             pass
     else:
+        if log:
+            log(f"[warning] reference conformer embedding failed; using mapped pose geometry")
         ref = mapped_h
     Chem.MolToMolFile(ref, str(lig_ref))
     return ligand_pdb, lig_ref
@@ -136,7 +141,7 @@ def run_complex_md(
         raise ValueError("compound_sdf/compound_file required to parameterize the ligand.")
     # Full-atom docked ligand (VF2-mapped to the template) + clean reference conformer, so the
     # parameterized topology and the assembled complex coordinates have matching atom counts.
-    ligand_pdb, lig_ref = _docked_ligand(Path(pose_pdbqt), str(compound), ctx.prep_dir)
+    ligand_pdb, lig_ref = _docked_ligand(Path(pose_pdbqt), str(compound), ctx.prep_dir, log=log)
 
     prepared = engine.prepare_structure(ctx, receptor_file=str(peptide_pdb), hetatm_decisions={})
     ligand = engine.parameterize_ligand(ctx, lig_ref_sdf=str(lig_ref), ligand_pdb=str(ligand_pdb),
@@ -155,5 +160,11 @@ def run_complex_md(
     if dg is None:
         dg = res.get("pbsa_dg_kcal_mol")
     if dg is None:
-        raise RuntimeError(f"MM/GBSA produced no ΔG for {sequence} (skipped: {res.get('reason')}).")
+        # Distinguish "MM/GBSA tool unavailable / skipped" (the real MD itself succeeded — the
+        # caller will fall back to the docking-anchored estimate) from a genuine MD failure, so
+        # the upstream log is actionable rather than a generic "MD failed".
+        if res.get("skipped"):
+            raise RuntimeError(f"MM/GBSA skipped for {sequence}: {res.get('reason')} "
+                               f"(real MD succeeded; caller falls back to the docking-anchored ΔG).")
+        raise RuntimeError(f"MM/GBSA produced no ΔG for {sequence} (parse failure; reason: {res.get('reason')}).")
     return float(dg)
