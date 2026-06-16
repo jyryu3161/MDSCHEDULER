@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mdworker"
+version = "0.1.0"
+description = "MD Platform worker: docking-to-MD pipeline (pose split, chemistry mapping, GROMACS/mock MD, analysis, packaging)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "CSBL MD Platform" }]
+dependencies = [
+    "rdkit",
+    "numpy",
+    "scipy",
+    "networkx",
+    "httpx",
+    "python-dateutil",
+]
+
+[project.optional-dependencies]
+# Trajectory analysis acceleration; import-guarded everywhere.
+analysis = ["MDAnalysis"]
+# Optional report rendering.
+report = ["weasyprint"]
+# RQ worker bootstrap (worker.py). Backend may install separately.
+rq = ["rq", "redis"]
+
+[project.scripts]
+mdworker-run = "mdworker.tasks:_cli_run_subjob"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mdworker*"]
+
+[tool.setuptools.package-data]
+mdworker = ["py.typed"]

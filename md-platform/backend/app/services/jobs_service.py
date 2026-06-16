@@ -1,0 +1,341 @@
+"""Job orchestration helpers: id generation, job+subjob creation, metadata.
+
+Centralizes the logic shared by the jobs router so the route handlers stay thin
+and the queue/realtime side-effects are consistent.
+"""
+
+from __future__ import annotations
+
+import copy
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+
+from sqlalchemy import func, select, update
+from sqlalchemy.orm import Session
+
+from ..config import Settings
+from ..models import (
+    ChemSource,
+    InputType,
+    Job,
+    JobStatus,
+    LigandType,
+    Priority,
+    SubJob,
+)
+from ..schemas import JobCreate, ValidationReport
+from . import gpu_manager, storage
+
+# Serializes the per-day job sequence counter to avoid duplicate ids under load.
+_id_lock = threading.Lock()
+
+# Preset -> ns (CONTRACT §6 / PDR). custom uses md_length_ns verbatim.
+_PRESET_NS = {"quick": 10, "standard": 50, "extended": 100}
+
+
+def resolve_md_length(create: JobCreate, default_ns: int) -> int:
+    preset = (create.md_preset or "standard").lower()
+    if preset in _PRESET_NS:
+        return _PRESET_NS[preset]
+    if preset == "custom":
+        return int(create.md_length_ns)
+    return int(default_ns)
+
+
+def _next_job_id(db: Session) -> str:
+    """Compute the next ``job_YYYYMMDD_NNN`` id by probing existing rows.
+
+    Caller MUST hold ``_id_lock`` and commit the inserted row before releasing it,
+    otherwise two concurrent callers could compute the same id.
+    """
+    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    prefix = f"job_{today}_"
+    count = db.execute(
+        select(func.count()).select_from(Job).where(Job.id.like(f"{prefix}%"))
+    ).scalar_one()
+    seq = int(count) + 1
+    while db.get(Job, f"{prefix}{seq:03d}") is not None:
+        seq += 1
+    return f"{prefix}{seq:03d}"
+
+
+def subjob_id(job_id: str, pose_index: int) -> str:
+    return f"{job_id}_pose_{pose_index:02d}"
+
+
+def select_top_poses(report: ValidationReport, top_n: int) -> list[tuple[int, float]]:
+    """Sort poses by docking score ascending (more negative = better) and take top-n.
+
+    Returns list of (pose_index, docking_score) preserving original 1-based indices.
+    """
+    poses = [(p.index, p.docking_score) for p in report.poses]
+    poses.sort(key=lambda t: (t[1], t[0]))
+    return poses[: max(1, top_n)]
+
+
+def _ligand_type(create: JobCreate, report: ValidationReport) -> str:
+    if create.ligand_type and create.ligand_type in LigandType.ALL:
+        return create.ligand_type
+    if report.ligand_type_candidates:
+        cand = report.ligand_type_candidates[0]
+        if cand in LigandType.ALL:
+            return cand
+    return LigandType.UNKNOWN
+
+
+def _input_type(report: ValidationReport) -> str:
+    it = (report.input_type or "pdbqt").lower()
+    return it if it in InputType.ALL else InputType.PDBQT
+
+
+def create_job_and_subjobs(
+    db: Session,
+    *,
+    user_id: int,
+    create: JobCreate,
+    report: ValidationReport,
+    upload_meta: dict,
+    settings: Settings,
+) -> tuple[Job, list[SubJob]]:
+    """Create the Job + top-n SubJobs (sorted by score), persist, write metadata.
+
+    Does NOT enqueue; the caller enqueues after commit so subjobs exist in the DB
+    before any worker picks them up.
+    """
+    md_len = resolve_md_length(create, settings.DEFAULT_MD_LENGTH_NS)
+    chem_source = create.ligand_chem_source if create.ligand_chem_source in ChemSource.ALL else ChemSource.SDF
+    priority = create.priority if create.priority in Priority.ALL else Priority.NORMAL
+    top_poses = select_top_poses(report, int(create.top_n_poses))
+
+    # Serialize id allocation + insert + commit so two concurrent creators can never
+    # compute or commit the same job id. Job creation is not a hot path, so a coarse
+    # in-process lock is acceptable and keeps the id scheme contract-exact.
+    with _id_lock:
+        job_id = _next_job_id(db)
+        name = create.name or upload_meta.get("name") or f"MD {job_id}"
+
+        job = Job(
+            id=job_id,
+            user_id=user_id,
+            name=name,
+            input_type=_input_type(report),
+            ligand_type=_ligand_type(create, report),
+            status=JobStatus.QUEUED,
+            md_length_ns=md_len,
+            top_n_poses=int(create.top_n_poses),
+            force_field=create.force_field or settings.PROTEIN_FORCE_FIELD,
+            ligand_force_field=create.ligand_force_field or settings.LIGAND_FORCE_FIELD,
+            ligand_chem_source=chem_source,
+            water_model=create.water_model or settings.WATER_MODEL,
+            salt_concentration=float(create.salt_concentration),
+            temperature=float(create.temperature),
+            pressure=float(create.pressure),
+            box_type=create.box_type,
+            priority=priority,
+            created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+        db.add(job)
+
+        subjobs: list[SubJob] = []
+        for pose_index, score in top_poses:
+            sj = SubJob(
+                id=subjob_id(job_id, pose_index),
+                job_id=job_id,
+                pose_index=pose_index,
+                docking_score=float(score),
+                status=JobStatus.QUEUED,
+                progress=0.0,
+                completed_ns=0.0,
+                ns_per_day=0.0,
+                current_step="queued",
+            )
+            db.add(sj)
+            subjobs.append(sj)
+
+        # Stage storage (dirs + copied inputs + metadata.json) BEFORE commit so a
+        # committed/queued job always has its artifact tree. If staging fails we roll
+        # back the DB and remove any partial tree, leaving no orphan rows.
+        db.flush()  # assign defaults without committing
+        try:
+            _stage_job_storage(job, subjobs, create, report, upload_meta, settings)
+            db.commit()
+        except Exception:
+            db.rollback()
+            storage.remove_job_storage(job_id)
+            raise
+
+    db.refresh(job)
+    for sj in subjobs:
+        db.refresh(sj)
+    return job, subjobs
+
+
+def _stage_job_storage(
+    job: Job,
+    subjobs: list[SubJob],
+    create: JobCreate,
+    report: ValidationReport,
+    upload_meta: dict,
+    settings: Settings,
+) -> None:
+    """Create the job artifact tree and copy original inputs; write metadata.json."""
+    jdir = storage.job_dir(job.id)
+    storage.ensure_dirs(
+        jdir,
+        jdir / "input" / "original",
+        jdir / "input" / "processed",
+        storage.summary_dir(job.id),
+    )
+    for sj in subjobs:
+        pdir = storage.pose_dir(job.id, sj.pose_index)
+        storage.ensure_dirs(
+            pdir / "prep",
+            pdir / "md",
+            pdir / "analysis",
+            pdir / "visualization",
+            pdir / "logs",
+        )
+
+    # Copy the uploaded originals into input/original/ so the worker is self-contained.
+    upload_id = create.upload_id
+    src_dir = storage.upload_dir(upload_id)
+    original = jdir / "input" / "original"
+    for key in ("pose_file", "chemistry_file", "receptor_file"):
+        fname = upload_meta.get(key)
+        if fname:
+            src = src_dir / fname
+            if src.exists():
+                (original / fname).write_bytes(src.read_bytes())
+
+    metadata = {
+        "job_id": job.id,
+        "name": job.name,
+        "user_id": job.user_id,
+        "upload_id": upload_id,
+        "input_type": job.input_type,
+        "ligand_type": job.ligand_type,
+        "ligand_chem_source": job.ligand_chem_source,
+        "md_length_ns": job.md_length_ns,
+        "md_preset": create.md_preset,
+        "top_n_poses": job.top_n_poses,
+        "force_field": job.force_field,
+        "ligand_force_field": job.ligand_force_field,
+        "water_model": job.water_model,
+        "box_type": job.box_type,
+        "salt_concentration": job.salt_concentration,
+        "temperature": job.temperature,
+        "pressure": job.pressure,
+        "priority": job.priority,
+        "use_gpu": create.use_gpu,
+        "hetatm_decisions": create.hetatm_decisions,
+        "cif_options": create.cif_options,
+        "smiles": upload_meta.get("smiles"),
+        "engine": settings.resolved_md_engine(),
+        "input_files": {
+            "pose_file": upload_meta.get("pose_file"),
+            "chemistry_file": upload_meta.get("chemistry_file"),
+            "receptor_file": upload_meta.get("receptor_file"),
+        },
+        "subjobs": [
+            {"id": sj.id, "pose_index": sj.pose_index, "docking_score": sj.docking_score}
+            for sj in subjobs
+        ],
+        "validation_report": copy.deepcopy(report.model_dump()),
+        "created_at": job.created_at.isoformat(),
+    }
+    storage.write_json(jdir / "metadata.json", metadata)
+
+
+def cancel_job(db: Session, job: Job) -> Job:
+    """Transition a job + its non-terminal subjobs to cancelled and free GPUs.
+
+    Uses a compare-and-swap guard per subjob: only subjobs still in a non-terminal
+    state are flipped, so a subjob the worker just completed is left as completed.
+    A worker that reports progress for an already-cancelled subjob is ignored by the
+    internal status handler (see ``apply_subjob_status``), preventing resurrection.
+    """
+    from ..models import GpuStatus, GpuStatusEnum
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    # Single transaction: cancel non-terminal subjobs, release their GPU locks, and
+    # cancel the parent job, then commit once. Either all of it lands or none does.
+    #
+    # Atomic compare-and-swap: flip ONLY non-terminal subjobs to cancelled in a
+    # conditional UPDATE so a subjob the worker completed between our read and write
+    # is not clobbered (its row no longer matches the WHERE clause).
+    db.execute(
+        update(SubJob)
+        .where(SubJob.job_id == job.id, SubJob.status.notin_(JobStatus.TERMINAL_SET))
+        .values(status=JobStatus.CANCELLED, current_step="cancelled", completed_at=now)
+    )
+    # Free GPU locks held by any subjob of this job, inline (no inner commit), so the
+    # release participates in this same transaction.
+    subjob_ids = db.execute(select(SubJob.id).where(SubJob.job_id == job.id)).scalars().all()
+    if subjob_ids:
+        held = db.execute(
+            select(GpuStatus).where(GpuStatus.assigned_subjob_id.in_(subjob_ids))
+        ).scalars().all()
+        for row in held:
+            if row.status == GpuStatusEnum.BUSY:
+                row.status = GpuStatusEnum.AVAILABLE
+            row.assigned_subjob_id = None
+            row.updated_at = now
+    job.status = JobStatus.CANCELLED
+    job.completed_at = now
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+def retry_job(db: Session, job: Job) -> tuple[Job, list[SubJob]]:
+    """Requeue failed/cancelled subjobs. Returns (job, requeued_subjobs).
+
+    Raises ValueError if nothing is retryable so the router can map it to 409.
+    """
+    subjobs = db.execute(select(SubJob).where(SubJob.job_id == job.id)).scalars().all()
+    to_requeue = [s for s in subjobs if s.status in (JobStatus.FAILED, JobStatus.CANCELLED)]
+    if not to_requeue:
+        raise ValueError("No failed or cancelled poses to retry.")
+    for sj in to_requeue:
+        sj.status = JobStatus.QUEUED
+        sj.current_step = "queued"
+        sj.progress = 0.0
+        sj.completed_ns = 0.0
+        sj.ns_per_day = 0.0
+        sj.error_message = None
+        sj.assigned_gpu = None
+        sj.started_at = None
+        sj.completed_at = None
+    job.status = JobStatus.QUEUED
+    job.completed_at = None
+    job.error_message = None
+    db.commit()
+    db.refresh(job)
+    return job, to_requeue
+
+
+def delete_job(db: Session, job: Job) -> None:
+    """Release GPUs and remove subjobs, logs, the job row, and storage."""
+    from ..models import JobLog  # local import to avoid cycle at module load
+
+    subjobs = db.execute(select(SubJob).where(SubJob.job_id == job.id)).scalars().all()
+    for sj in subjobs:
+        gpu_manager.release_gpu(db, sj.id)
+        db.delete(sj)
+    db.query(JobLog).filter(JobLog.job_id == job.id).delete(synchronize_session=False)
+    job_id = job.id
+    db.delete(job)
+    db.commit()
+    storage.remove_job_storage(job_id)
+
+
+def storage_estimate_gb(top_n: int, md_length_ns: int) -> float:
+    """Rough per-job storage estimate for the UI (heuristic, clearly approximate)."""
+    # ~0.4 GB per pose at 50 ns as a coarse linear heuristic.
+    per_pose = 0.4 * (md_length_ns / 50.0)
+    return round(per_pose * max(1, top_n), 2)
+
+
+def find_pose_dir(job_id: str, pose_index: int) -> Path:
+    return storage.pose_dir(job_id, pose_index)

@@ -1,0 +1,184 @@
+# =============================================================================
+# MD Platform - docker-compose (CONTRACT §11 / PDR §21.2)
+#
+# Services: frontend, backend, redis, db, worker-gpu-0, worker-gpu-1.
+#
+# BUILD CONTEXT / mdworker PACKAGING (CONTRACT §5 "Worker↔Backend seam"):
+#   Both the backend and the worker need the installable `mdworker` package
+#   (the worker runs the pipeline; the backend imports it for the Reporter
+#   Protocol type and the in-process LocalExecutor). To make `worker/` available
+#   to BOTH images from a single coherent rule, every buildable service uses the
+#   PROJECT ROOT as its build context and names its Dockerfile explicitly:
+#
+#       build:
+#         context: .                       # repo root -> backend/, worker/ both visible
+#         dockerfile: backend/Dockerfile    # (or worker/Dockerfile, frontend/Dockerfile)
+#
+#   This is the ONE approach used throughout. The component Dockerfiles
+#   (owned by the backend/worker/frontend components) are expected to:
+#     - backend/Dockerfile : COPY backend/ + COPY worker/ ; pip install -r
+#                            backend requirements AND `pip install -e ./worker`.
+#     - worker/Dockerfile  : FROM md-platform-mdenv:latest ; COPY worker/ ;
+#                            `pip install -e ./worker` (the mdworker package).
+#     - frontend/Dockerfile: build the Vite app, serve via nginx on :80,
+#                            proxy /api -> backend:8000.
+#   Paths inside each Dockerfile are therefore relative to the repo root.
+#
+# GPU / WORKER COUNT:
+#   One worker = one GPU (CONTRACT §1 GPU_ASSIGNMENT_MODE=one_job_per_gpu).
+#   Two GPU workers are defined (worker-gpu-0, worker-gpu-1). To match the host:
+#     * FEWER GPUs : delete the extra worker-gpu-* service(s).
+#     * MORE  GPUs : copy a worker-gpu-N block, set CUDA_VISIBLE_DEVICES=N,
+#                    WORKER_GPU_ID=N, and the device_ids reservation to "N".
+#   Set NUM_GPUS in .env to match (or leave NUM_GPUS=auto for nvidia-smi detect).
+#   The `x-worker-base` anchor below holds the shared worker config; each
+#   worker only overrides its GPU id.
+#
+# PREREQUISITES: Docker, Docker Compose v2, NVIDIA driver + NVIDIA Container
+#   Toolkit (for GPU reservations). Verify GPU passthrough:
+#     docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
+#   The md-env base image must be built first (scripts/install.sh / `make` does this):
+#     docker build -t md-platform-mdenv:latest ./md-env
+# =============================================================================
+
+# Shared worker configuration (YAML anchor). Each worker service merges this and
+# sets only its GPU-specific environment + device reservation.
+x-worker-base: &worker-base
+  build:
+    context: .
+    dockerfile: worker/Dockerfile
+  image: md-platform-worker:latest
+  env_file:
+    - .env
+  environment:
+    BACKEND_URL: http://backend:8000
+    STORAGE_ROOT: /app/storage
+    MDP_TEMPLATE_DIR: /app/md-env/templates/gromacs
+  volumes:
+    - ./storage:/app/storage
+    - ./md-env:/app/md-env:ro
+  depends_on:
+    - backend
+    - redis
+  restart: unless-stopped
+
+services:
+  # ---------------------------------------------------------------------------
+  # Frontend: built Vite app served by nginx on :80; proxies /api -> backend.
+  # Host port from APP_PORT (default 8888) maps to container :80.
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: md-platform-frontend:latest
+    ports:
+      - "${APP_PORT:-8888}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Backend: FastAPI (uvicorn) on :8000 (cluster-internal; frontend proxies it).
+  # Sole writer of the DB. Mounts storage (rw) and md-env (ro, for mdp templates
+  # and force fields). Needs the mdworker package (LocalExecutor + Reporter type).
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: md-platform-backend:latest
+    expose:
+      - "8000"
+    env_file:
+      - .env
+    environment:
+      STORAGE_ROOT: /app/storage
+      # DB credentials are interpolated from .env (POSTGRES_*) and MUST match the
+      # `db` service below (same ${POSTGRES_*} vars), so backend and Postgres
+      # always agree. The :-defaults are non-secret dev placeholders for the
+      # zero-config quickstart (PDR §21.3); set real values in .env (which is
+      # gitignored) for any non-local deployment.
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-mduser}:${POSTGRES_PASSWORD:-mdpass}@db:5432/${POSTGRES_DB:-mdplatform}
+      REDIS_URL: redis://redis:6379/0
+      MDP_TEMPLATE_DIR: /app/md-env/templates/gromacs
+    volumes:
+      - ./storage:/app/storage
+      - ./md-env:/app/md-env:ro
+    depends_on:
+      - redis
+      - db
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Redis: RQ broker for the job queue (QUEUE_BACKEND=rq|auto).
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7
+    volumes:
+      - ./redis_data:/data
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Database: PostgreSQL 16. POSTGRES_* MUST match the DATABASE_URL above
+  # (mduser / mdpass / mdplatform). Data persisted to ./postgres_data.
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:16
+    # Same ${POSTGRES_*} vars as the backend DATABASE_URL above, so a custom
+    # .env applies to both the created database and the connection string.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mduser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mdpass}
+      POSTGRES_DB: ${POSTGRES_DB:-mdplatform}
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mduser} -d ${POSTGRES_DB:-mdplatform}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # GPU worker 0. One subjob per GPU. CUDA_VISIBLE_DEVICES + WORKER_GPU_ID pin
+  # the device; the deploy.resources reservation requests one nvidia GPU (id 0).
+  # ---------------------------------------------------------------------------
+  worker-gpu-0:
+    <<: *worker-base
+    environment:
+      BACKEND_URL: http://backend:8000
+      STORAGE_ROOT: /app/storage
+      MDP_TEMPLATE_DIR: /app/md-env/templates/gromacs
+      CUDA_VISIBLE_DEVICES: "0"
+      WORKER_GPU_ID: "0"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: ["gpu"]
+
+  # ---------------------------------------------------------------------------
+  # GPU worker 1. Remove this service on single-GPU hosts; copy & renumber for
+  # additional GPUs (see header note).
+  # ---------------------------------------------------------------------------
+  worker-gpu-1:
+    <<: *worker-base
+    environment:
+      BACKEND_URL: http://backend:8000
+      STORAGE_ROOT: /app/storage
+      MDP_TEMPLATE_DIR: /app/md-env/templates/gromacs
+      CUDA_VISIBLE_DEVICES: "1"
+      WORKER_GPU_ID: "1"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: ["gpu"]
+
+# Named host-path volumes are declared inline above (bind mounts to ./storage,
+# ./postgres_data, ./redis_data). No top-level named volumes are required.

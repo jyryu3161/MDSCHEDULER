@@ -1,0 +1,65 @@
+; md.mdp - production MD at 300 K / 1 bar, no position restraints.
+; Force field: AMBER14SB (protein) + GAFF2 (ligand) + TIP3P (water).
+;
+; The placeholder __NSTEPS__ is substituted by the MD engine at runtime:
+;   nsteps = round(md_length_ns * 1000 / dt_ps) = md_length_ns * 1000 / 0.002
+;   e.g. 50 ns -> 25000000 steps.
+; The placeholder __NSTXOUT_COMPRESSED__ is substituted from TRAJECTORY_OUTPUT_PS:
+;   nstxout-compressed = round(TRAJECTORY_OUTPUT_PS / dt_ps) = TRAJECTORY_OUTPUT_PS / 0.002
+;   e.g. 100 ps -> 50000 steps between compressed (.xtc) frames.
+
+; Run control
+integrator              = md
+dt                      = 0.002         ; 2 fs
+nsteps                  = __NSTEPS__     ; engine substitutes from md_length_ns
+
+; Output control
+nstxout                 = 0             ; no uncompressed coordinate output
+nstvout                 = 0
+nstfout                 = 0
+nstenergy               = 5000          ; energy every 10 ps
+nstlog                  = 5000
+nstxout-compressed      = __NSTXOUT_COMPRESSED__   ; .xtc every TRAJECTORY_OUTPUT_PS
+compressed-x-grps       = System
+
+; Bond constraints
+continuation            = yes           ; continue from NPT
+constraint_algorithm    = lincs
+constraints             = h-bonds
+lincs_iter              = 1
+lincs_order             = 4
+
+; Neighbor searching
+cutoff-scheme           = Verlet
+nstlist                 = 20
+ns_type                 = grid
+pbc                     = xyz
+verlet-buffer-tolerance = 0.005
+
+; Electrostatics
+coulombtype             = PME
+rcoulomb                = 1.0
+pme_order               = 4
+fourierspacing          = 0.16
+
+; van der Waals
+vdwtype                 = Cut-off
+rvdw                    = 1.0
+rlist                   = 1.0
+DispCorr                = EnerPres
+
+; Temperature coupling
+tcoupl                  = V-rescale
+tc-grps                 = Protein_MOL Water_and_ions
+tau_t                   = 0.1     0.1
+ref_t                   = 300     300
+
+; Pressure coupling (Parrinello-Rahman, isotropic, 1 bar)
+pcoupl                  = Parrinello-Rahman
+pcoupltype              = isotropic
+tau_p                   = 2.0
+ref_p                   = 1.0
+compressibility         = 4.5e-5
+
+; Velocity generation off (continuation)
+gen_vel                 = no

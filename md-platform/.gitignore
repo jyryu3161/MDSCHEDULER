@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Node
+node_modules/
+frontend/dist/
+*.log
+
+# Env / secrets
+.env
+
+# Storage / runtime data (keep tree, ignore contents)
+storage/uploads/*
+storage/jobs/*
+storage/results/*
+!storage/**/.gitkeep
+*.db
+postgres_data/
+
+# OS
+.DS_Store

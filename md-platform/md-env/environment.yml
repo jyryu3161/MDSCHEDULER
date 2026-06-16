@@ -1,0 +1,30 @@
+# Conda environment for the MD Platform scientific base (md-env).
+# Pins the DIRECT/scientific packages of the fixed toolchain (CONTRACT §1 /
+# PDR §5.4): AmberTools (AM1-BCC via antechamber/sqm), ACPYPE (GAFF2), RDKit
+# (bond-order assignment), MDAnalysis (trajectory analysis), plus NumPy/SciPy.
+#
+# SCOPE: this file pins the named (direct) packages only. The conda solver still
+# resolves TRANSITIVE dependencies at build time, so this is reproducible at the
+# direct-package level but NOT a full lock. For a fully reproducible build that
+# pins every transitive package+build, generate an explicit lock with conda-lock
+# and pass it to the Dockerfile (the Dockerfile uses md-env/conda-linux-64.lock
+# when present, else falls back to this environment.yml):
+#
+#   conda-lock lock -f md-env/environment.yml -p linux-64 \
+#       --lockfile md-env/conda-lock.yml
+#   conda-lock render -p linux-64 --kind explicit md-env/conda-lock.yml
+#   # produces conda-linux-64.lock (explicit @EXPLICIT spec file)
+#
+# To refresh the direct pins: bump a version below and rebuild, then regenerate
+# the lock as above.
+name: mdtools
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10.14
+  - ambertools=23.6
+  - acpype=2023.10.27
+  - rdkit=2024.03.5
+  - mdanalysis=2.7.0
+  - numpy=1.26.4
+  - scipy=1.13.1

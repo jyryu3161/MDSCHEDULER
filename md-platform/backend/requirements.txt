@@ -1,0 +1,31 @@
+# MD Platform — Backend (FastAPI) runtime dependencies.
+#
+# NOTE on the worker package (`mdworker`):
+#   The backend imports `mdworker` for the Reporter Protocol type, the
+#   `validate_input` entrypoint, and `mdworker.pipeline.runner.run_subjob`.
+#   It is NOT listed here because `-e ../worker` is not valid inside a frozen
+#   requirements file and the build context differs between local dev and Docker.
+#   Install it separately:
+#       local dev : pip install -e ../worker
+#       Docker    : the image COPYs worker/ and runs `pip install ./worker`
+#   The backend is written to import-guard `mdworker`, so it still starts and
+#   serves health/auth even when the worker (or its heavy deps such as rdkit) is
+#   absent; validation/enqueue endpoints then return a clear, actionable error.
+
+fastapi>=0.115
+uvicorn[standard]>=0.30
+sqlalchemy>=2.0
+pydantic>=2.7
+pydantic-settings>=2.3
+python-multipart>=0.0.9
+bcrypt>=4.1
+pyjwt>=2.8
+sse-starlette>=2.1
+redis>=5.0
+rq>=1.16
+psutil>=5.9
+httpx>=0.27
+python-dateutil>=2.9
+
+# Test-only (kept here so the test image installs cleanly):
+pytest>=8.0

@@ -1,0 +1,381 @@
+"""Pydantic v2 request/response DTOs for every API in CONTRACT §5/§6/§7."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# ---------------------------------------------------------------------------
+# Auth (§5 Auth)
+# ---------------------------------------------------------------------------
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    must_change_password: bool
+    role: str
+    username: str
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str = Field(min_length=4)
+
+
+class OkResponse(BaseModel):
+    ok: bool = True
+
+
+class UserMe(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    username: str
+    role: str
+    must_change_password: bool
+    is_active: bool
+    created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Validation report (§7)
+# ---------------------------------------------------------------------------
+
+
+class PoseEntry(BaseModel):
+    index: int
+    docking_score: float
+
+
+class AtomMapping(BaseModel):
+    attempted: bool = False
+    success: bool = False
+    template_heavy_atoms: int | None = None
+    pose_heavy_atoms: int | None = None
+    molformula_template: str | None = None
+    molformula_pose: str | None = None
+    matched_atoms: int | None = None
+    message: str = ""
+
+
+class HetatmCandidate(BaseModel):
+    resname: str
+    count: int
+    suggested: str
+
+
+class ReceptorInfo(BaseModel):
+    format: str | None = None
+    chains: list[str] = Field(default_factory=list)
+    n_residues: int = 0
+    n_atoms: int = 0
+    has_hetatm: bool = False
+
+
+class ValidationReport(BaseModel):
+    ok: bool
+    input_type: str
+    pose_count: int = 0
+    poses: list[PoseEntry] = Field(default_factory=list)
+    ligand_type_candidates: list[str] = Field(default_factory=list)
+    chem_source: str = "none"
+    atom_mapping: AtomMapping = Field(default_factory=AtomMapping)
+    hetatm_candidates: list[HetatmCandidate] = Field(default_factory=list)
+    receptor: ReceptorInfo = Field(default_factory=ReceptorInfo)
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+    @field_validator("atom_mapping", mode="before")
+    @classmethod
+    def _default_atom_mapping(cls, v):  # noqa: ANN001
+        # The worker may omit atom_mapping (e.g. raw PDBQT) -> default to "not attempted".
+        return AtomMapping() if v is None else v
+
+    @field_validator("receptor", mode="before")
+    @classmethod
+    def _default_receptor(cls, v):  # noqa: ANN001
+        # The worker emits receptor=null when no receptor was provided.
+        return ReceptorInfo() if v is None else v
+
+
+# ---------------------------------------------------------------------------
+# Uploads (§5 Uploads)
+# ---------------------------------------------------------------------------
+
+
+class UploadResponse(BaseModel):
+    upload_id: str
+    pose_file: str | None = None
+    chemistry_file: str | None = None
+    receptor_file: str | None = None
+    detected_pose_count: int = 0
+    detected_input_type: str
+    ligand_type_candidates: list[str] = Field(default_factory=list)
+    hetatm_candidates: list[HetatmCandidate] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Jobs (§6 JobCreate, §5 Jobs)
+# ---------------------------------------------------------------------------
+
+
+class JobCreate(BaseModel):
+    upload_id: str
+    name: str | None = None
+    ligand_type: Literal[
+        "small_molecule", "peptide", "protein_partner", "cofactor", "unknown"
+    ] = "small_molecule"
+    ligand_chem_source: Literal["sdf", "mol2", "smiles", "meeko", "manual"] = "sdf"
+    top_n_poses: int = Field(default=3, ge=1, le=50)
+    md_length_ns: int = Field(default=50, ge=1, le=10000)
+    md_preset: Literal["quick", "standard", "extended", "custom"] = "standard"
+    force_field: str = "amber14sb"
+    ligand_force_field: str = "gaff2"
+    water_model: str = "tip3p"
+    box_type: Literal["dodecahedron", "cubic"] = "dodecahedron"
+    salt_concentration: float = 0.15
+    temperature: float = 300.0
+    pressure: float = 1.0
+    use_gpu: bool = True
+    priority: Literal["low", "normal", "high"] = "normal"
+    hetatm_decisions: dict[str, str] = Field(default_factory=dict)
+    cif_options: dict[str, Any] = Field(default_factory=dict)
+
+
+class JobOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: int
+    name: str
+    input_type: str
+    ligand_type: str
+    status: str
+    md_length_ns: int
+    top_n_poses: int
+    force_field: str
+    ligand_force_field: str
+    ligand_chem_source: str
+    water_model: str
+    salt_concentration: float
+    temperature: float
+    pressure: float
+    box_type: str
+    priority: str
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    result_path: str | None = None
+    error_message: str | None = None
+
+
+class SubJobOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    job_id: str
+    pose_index: int
+    docking_score: float
+    status: str
+    assigned_gpu: int | None = None
+    progress: float
+    completed_ns: float
+    ns_per_day: float
+    current_step: str
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    result_path: str | None = None
+    error_message: str | None = None
+
+
+class JobLogOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    job_id: str
+    subjob_id: str | None = None
+    level: str
+    step: str
+    message: str
+    created_at: datetime
+
+
+class JobDetail(BaseModel):
+    job: JobOut
+    subjobs: list[SubJobOut]
+    logs: list[JobLogOut]
+
+
+# ---------------------------------------------------------------------------
+# Queue (§5 Queue)
+# ---------------------------------------------------------------------------
+
+
+class QueueItem(BaseModel):
+    job_id: str
+    subjob_id: str
+    job_name: str
+    user: str
+    pose_index: int
+    status: str
+    queue_position: int | None = None
+    assigned_gpu: int | None = None
+    progress: float = 0.0
+    completed_ns: float = 0.0
+    md_length_ns: int = 0
+    ns_per_day: float = 0.0
+    rough_eta_seconds: float | None = None
+
+
+class QueueResponse(BaseModel):
+    items: list[QueueItem]
+    running: list[QueueItem]
+
+
+class PriorityUpdate(BaseModel):
+    priority: Literal["low", "normal", "high"]
+
+
+# ---------------------------------------------------------------------------
+# GPU (§5 GPU)
+# ---------------------------------------------------------------------------
+
+
+class GpuStatusOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    gpu_id: int
+    name: str
+    status: str
+    utilization: float
+    memory_used: float
+    memory_total: float
+    temperature: float
+    assigned_subjob_id: str | None = None
+    updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Results (§5 Results)
+# ---------------------------------------------------------------------------
+
+
+class SubJobResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    job_id: str
+    pose_index: int
+    docking_score: float
+    status: str
+    progress: float
+    completed_ns: float
+    ns_per_day: float
+    result_path: str | None = None
+    error_message: str | None = None
+    analysis_summary: dict[str, Any] = Field(default_factory=dict)
+    plots_available: list[str] = Field(default_factory=list)
+    has_trajectory: bool = False
+    has_movie: bool = False
+    # Optional MM/PBSA & MM/GBSA binding free energy (ΔG, kcal/mol) when computed
+    # (job compute_mmpbsa=true). None when not run. Keys: gbsa_dg_kcal_mol, pbsa_dg_kcal_mol,
+    # method, frames.
+    mmpbsa: dict[str, Any] | None = None
+    # Optional per-residue ΔG decomposition (which peptide residues drive binding). None when
+    # not computed. Keys: residues:[{resname,resnum,total_dg,vdw,eel,...}], hotspots:[...].
+    per_residue: dict[str, Any] | None = None
+    # Auto-detected bound window (analysis/summary.json bound_window): the leading segment
+    # where the ligand stays in the pocket. Keys: start_ns, end_ns, n_bound_frames,
+    # n_total_frames, fully_bound, criterion. None for older results.
+    bound_window: dict[str, Any] | None = None
+    # Unified binding-hotspot table merging per-residue ΔG (MM/PBSA) with contact frequency
+    # and mean H-bonds (geometric, over the bound window) keyed by residue. Empty when neither
+    # source exists. Rows: {residue, chain, resname, resnum, total_dg, vdw, eel,
+    # contact_frequency, hbond_mean}.
+    hotspots: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class JobResults(BaseModel):
+    job: JobOut
+    subjobs: list[SubJobResult]
+
+
+class SubJobResultDetail(BaseModel):
+    subjob: SubJobResult
+    pose_comparison: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Dashboard (§5 Dashboard summary)
+# ---------------------------------------------------------------------------
+
+
+class DashboardSummary(BaseModel):
+    total_jobs: int
+    running_jobs: int
+    queued_jobs: int
+    completed_jobs: int
+    failed_jobs: int
+    gpus_available: int
+    gpus_busy: int
+    storage_used_gb: float
+    storage_total_gb: float
+
+
+# ---------------------------------------------------------------------------
+# Internal worker -> backend (§5 Internal)
+# ---------------------------------------------------------------------------
+
+
+class InternalSubjobStatus(BaseModel):
+    status: str | None = None
+    current_step: str | None = None
+    progress: float | None = None
+    completed_ns: float | None = None
+    ns_per_day: float | None = None
+    assigned_gpu: int | None = None
+    error_message: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    result_path: str | None = None
+
+
+class InternalJobStatus(BaseModel):
+    status: str | None = None
+    result_path: str | None = None
+    error_message: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class InternalLog(BaseModel):
+    job_id: str
+    subjob_id: str | None = None
+    level: Literal["info", "warning", "error"] = "info"
+    step: str = ""
+    message: str
+
+
+class InternalGpuAssign(BaseModel):
+    subjob_id: str | None = None
+    status: str
+
+
+class InternalGpuRequest(BaseModel):
+    subjob_id: str
+
+
+class InternalGpuRequestResponse(BaseModel):
+    gpu_id: int | None = None
+
+
+class InternalGpuReleaseRequest(BaseModel):
+    subjob_id: str
