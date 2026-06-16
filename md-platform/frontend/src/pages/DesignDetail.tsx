@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { designApi, normalizeError } from "../api";
@@ -25,17 +25,23 @@ export function DesignDetail() {
   const [error, setError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
 
+  // Latest status in a ref so polling can stop on a terminal run WITHOUT putting status in the
+  // effect deps (which would re-run the effect — and reset detail — on every update, looping).
+  const statusRef = useRef<string | null>(null);
+
   useEffect(() => {
     // Per-effect guard: a response for a previous designId (or after unmount) is ignored, so
     // switching runs never lets a stale fetch clobber the current one.
     let active = true;
     setDetail(null);
     setError(null);
+    statusRef.current = null;
 
     const load = async () => {
       try {
         const d = await designApi.get(designId);
         if (!active) return;
+        statusRef.current = d.job.status;
         setDetail(d);
         setError(null); // a successful refresh clears a prior transient error
       } catch (err) {
@@ -45,15 +51,14 @@ export function DesignDetail() {
 
     load();
     const t = setInterval(() => {
-      if (detail && TERMINAL.has(detail.job.status)) return;
+      if (statusRef.current && TERMINAL.has(statusRef.current)) return;
       load();
     }, POLL_MS);
     return () => {
       active = false;
       clearInterval(t);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [designId, detail?.job.status]);
+  }, [designId]);
 
   async function refresh() {
     try {
