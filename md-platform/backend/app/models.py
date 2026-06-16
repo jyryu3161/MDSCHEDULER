@@ -89,6 +89,16 @@ class GpuStatusEnum:
     ALL = (AVAILABLE, BUSY, DISABLED, MAINTENANCE, ERROR)
 
 
+class GpuPool:
+    """Which workload a GPU is reserved for (CONTRACT §2 gpustatus.pool)."""
+
+    MD = "md"             # regular docking-result MD jobs
+    DESIGN = "design"     # peptide-design (GA) MD evaluations
+    EXCLUDED = "excluded"  # unmanaged — left free for other use, never scheduled
+
+    ALL = (MD, DESIGN, EXCLUDED)
+
+
 class LigandType:
     SMALL_MOLECULE = "small_molecule"
     PEPTIDE = "peptide"
@@ -228,6 +238,12 @@ class GpuStatus(Base):
     memory_total: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     temperature: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     assigned_subjob_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Pool the GPU is reserved for ("md" | "design" | "excluded"); see GpuPool.
+    pool: Mapped[str] = mapped_column(String(16), default=GpuPool.MD, nullable=False, index=True)
+    # How many subjobs may run on this GPU at once (parallel MD); 1 = exclusive.
+    capacity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # Authoritative count of subjobs currently occupying a slot on this GPU (0..capacity).
+    running_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
 
@@ -253,3 +269,67 @@ class ResourceUsage(Base):
     memory_used: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     disk_used: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     sampled_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class DesignJob(Base):
+    """A peptide-design GA run: evolve peptides to bind a fixed target compound.
+
+    Reuses the JobStatus enum for ``status`` (queued/preparing/running_md/analyzing/
+    completed/failed/cancelled). Runs on the GPU design pool; docking is CPU-only, MD
+    evaluation of the per-generation elites uses the design-pool GPU(s).
+    """
+
+    __tablename__ = "designjobs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default=JobStatus.QUEUED, nullable=False, index=True)
+
+    # Target compound (the ligand the peptides must bind).
+    compound_name: Mapped[str] = mapped_column(String(255), default="compound", nullable=False)
+    compound_file: Mapped[str] = mapped_column(String(512), nullable=False)  # path to sdf/mol/smiles
+
+    # GA configuration.
+    initial_sequences: Mapped[str] = mapped_column(Text, nullable=False)  # JSON list[str]
+    peptide_length: Mapped[int] = mapped_column(Integer, nullable=False)
+    population_size: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
+    num_generations: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    top_k_md: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    md_length_ns: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
+    exhaustiveness: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
+    # Per-generation evaluation policy: "hybrid" (dock all -> MD top-k) | "md_only" (MD all).
+    eval_mode: Mapped[str] = mapped_column(String(16), default="hybrid", nullable=False)
+    # Docking engine for this run: "vina" (default) | "smina" | "auto".
+    dock_engine: Mapped[str] = mapped_column(String(16), default="vina", nullable=False)
+
+    # Progress + results.
+    current_generation: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    progress: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    assigned_gpu: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    best_sequence: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    best_fitness: Mapped[float | None] = mapped_column(Float, nullable=True)
+    best_docking_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    best_md_dg: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    result_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class DesignCandidate(Base):
+    """One peptide evaluated during a design run (a GA individual in some generation)."""
+
+    __tablename__ = "designcandidates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    design_job_id: Mapped[str] = mapped_column(String(64), ForeignKey("designjobs.id"), nullable=False, index=True)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    sequence: Mapped[str] = mapped_column(String(256), nullable=False)
+    docking_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    md_dg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fitness: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    refined: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)  # MD-evaluated
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)

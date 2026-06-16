@@ -277,6 +277,9 @@ export interface QueueResponse {
 
 // ── GPU (CONTRACT §2 gpustatus) ──────────────────────────────────────────────
 
+export const GPU_POOLS = ["md", "design", "excluded"] as const;
+export type GpuPool = (typeof GPU_POOLS)[number];
+
 export interface GpuStatus {
   gpu_id: number;
   name: string;
@@ -286,6 +289,9 @@ export interface GpuStatus {
   memory_total: number;
   temperature: number;
   assigned_subjob_id: string | null;
+  pool: GpuPool;
+  capacity: number;
+  running_count: number;
   updated_at: string;
 }
 
@@ -416,6 +422,75 @@ export type TrajectoryFormat = "pdb" | "xtc";
 export interface TrajectoryPayload {
   format: TrajectoryFormat;
   blob: Blob;
+}
+
+// ── Peptide design (GA) ──────────────────────────────────────────────────────
+
+export type DesignEvalMode = "hybrid" | "md_only";
+export type DesignDockEngine = "vina" | "smina" | "gnina" | "auto";
+
+export interface DesignJob {
+  id: string;
+  user_id: number;
+  name: string;
+  status: JobStatus;
+  compound_name: string;
+  peptide_length: number;
+  population_size: number;
+  num_generations: number;
+  top_k_md: number;
+  md_length_ns: number;
+  eval_mode: DesignEvalMode;
+  dock_engine: DesignDockEngine;
+  current_generation: number;
+  progress: number;
+  assigned_gpu: number | null;
+  best_sequence: string | null;
+  best_fitness: number | null;
+  best_docking_score: number | null;
+  best_md_dg: number | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  error_message: string | null;
+}
+
+export interface DesignCandidate {
+  generation: number;
+  sequence: string;
+  docking_score: number | null;
+  md_dg: number | null;
+  fitness: number;
+  refined: boolean;
+}
+
+export interface DesignGenerationPoint {
+  generation: number;
+  best_fitness: number;
+  best_sequence: string;
+  best_docking_score: number | null;
+  best_md_dg: number | null;
+}
+
+export interface DesignJobDetail {
+  job: DesignJob;
+  candidates: DesignCandidate[];      // leaderboard, fitness desc
+  generations: DesignGenerationPoint[]; // best-so-far convergence curve
+}
+
+export interface DesignJobCreate {
+  name: string;
+  initial_sequences: string;          // comma/space/newline-separated
+  population_size: number;
+  num_generations: number;
+  top_k_md: number;
+  md_length_ns: number;
+  exhaustiveness: number;
+  eval_mode: DesignEvalMode;     // hybrid (dock→top-k MD) | md_only (MD all)
+  dock_engine: DesignDockEngine; // vina | smina | gnina | auto
+  compound_name: string;
+  smiles?: string;
+  compound?: File | null;
 }
 
 // Generic backend error body for rejected job creation (CONTRACT §7).

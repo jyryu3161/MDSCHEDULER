@@ -5,6 +5,7 @@ import { useAuth } from "../auth";
 // Top navigation links available to every authenticated user.
 const NAV_LINKS: { to: string; label: string; end?: boolean }[] = [
   { to: "/", label: "Dashboard", end: true },
+  { to: "/design", label: "Peptide Design" },
   { to: "/upload", label: "New Job" },
 ];
 

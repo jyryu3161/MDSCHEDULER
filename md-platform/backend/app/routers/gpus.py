@@ -5,13 +5,20 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from pydantic import BaseModel, Field
+
 from ..database import get_db
 from ..deps import get_current_user, require_admin
-from ..models import GpuStatusEnum, User
+from ..models import GpuPool, GpuStatusEnum, User
 from ..schemas import GpuStatusOut
 from ..services import gpu_manager
 
 router = APIRouter(prefix="/gpus", tags=["gpus"])
+
+
+class ConcurrencyUpdate(BaseModel):
+    pool: str = GpuPool.MD
+    concurrency: int = Field(ge=1, le=16)
 
 
 @router.get("", response_model=list[GpuStatusOut])
@@ -20,6 +27,24 @@ def list_gpus(
     _user: User = Depends(get_current_user),
 ) -> list[GpuStatusOut]:
     return [GpuStatusOut.model_validate(g) for g in gpu_manager.list_gpus(db)]
+
+
+@router.patch("/concurrency", response_model=list[GpuStatusOut])
+def set_concurrency(
+    body: ConcurrencyUpdate,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+) -> list[GpuStatusOut]:
+    """Set how many subjobs may run concurrently on each GPU in a pool (parallel-MD control).
+
+    Adjustable from the dashboard; takes effect immediately for new claims (running subjobs are
+    never evicted). Returns the updated pool GPUs.
+    """
+    if body.pool not in (GpuPool.MD, GpuPool.DESIGN):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"pool must be one of: {GpuPool.MD}, {GpuPool.DESIGN}.")
+    rows = gpu_manager.set_pool_capacity(db, body.pool, body.concurrency)
+    return [GpuStatusOut.model_validate(r) for r in rows]
 
 
 def _set_status(db: Session, gpu_id: int, target: str) -> GpuStatusOut:

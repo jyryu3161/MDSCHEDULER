@@ -33,6 +33,7 @@ class QueueManager:
         self._settings: Settings = get_settings()
         self._backend = self._settings.resolved_queue_backend()
         self._executor: ThreadPoolExecutor | None = None
+        self._design_executor: ThreadPoolExecutor | None = None
         self._rq_queue = None
         self._lock = threading.Lock()
         self._init_backend()
@@ -53,7 +54,13 @@ class QueueManager:
                 self._backend = "local"
 
         if self._backend == "local":
-            workers = max(1, self._settings.resolved_num_gpus())
+            # One worker per MD-pool slot (GPUs in the MD pool × parallel-MD concurrency), plus
+            # headroom for design-job orchestrators which run on the design pool.
+            pools = self._settings.resolved_gpu_pools()
+            md_gpus = sum(1 for p in pools.values() if p == "md") or 1
+            design_gpus = sum(1 for p in pools.values() if p == "design")
+            md_slots = md_gpus * self._settings.resolved_md_concurrency()
+            workers = max(1, md_slots + max(1, design_gpus))
             self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="md-local")
 
     @property
@@ -75,6 +82,25 @@ class QueueManager:
         # local
         assert self._executor is not None
         self._executor.submit(self._run_local, subjob_id)
+
+    def enqueue_design(self, design_id: str) -> None:
+        """Run a peptide-design job. Always executes in-process (the orchestrator runs the GA
+        loop, fans docking out to threads, and drives MD on the design-pool GPU); RQ mode gets a
+        lazily-created single-thread executor so design never blocks the MD queue."""
+        if self._executor is not None:
+            self._executor.submit(self._run_design_local, design_id)
+            return
+        # Lazily create the single-worker design executor under the lock (double-checked) so
+        # concurrent requests can't each build one and break the single-worker serialization.
+        if self._design_executor is None:
+            with self._lock:
+                if self._design_executor is None:
+                    self._design_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="design")
+        self._design_executor.submit(self._run_design_local, design_id)
+
+    def _run_design_local(self, design_id: str) -> None:
+        from .design_service import run_design_job
+        run_design_job(design_id)
 
     # ---- local execution -------------------------------------------------
 
@@ -188,6 +214,8 @@ class QueueManager:
     def shutdown(self) -> None:
         if self._executor is not None:
             self._executor.shutdown(wait=False, cancel_futures=False)
+        if self._design_executor is not None:
+            self._design_executor.shutdown(wait=False, cancel_futures=False)
 
 
 # Process-global manager, lazily created.

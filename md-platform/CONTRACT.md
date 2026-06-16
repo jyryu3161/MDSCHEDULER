@@ -52,6 +52,10 @@ JWT_EXPIRE_MINUTES=480
 QUEUE_BACKEND=auto                     # rq | local | auto (auto = rq if REDIS reachable else local)
 INTERNAL_API_TOKEN=internal-worker-token-change-me
 NUM_GPUS=auto                          # auto = detect via nvidia-smi; integer to force
+MD_GPU_IDS=                            # csv GPU ids for the MD pool (empty = all non-design GPUs)
+DESIGN_GPU_IDS=                        # csv GPU ids reserved for peptide design (empty = none)
+MD_GPU_CONCURRENCY=1                   # parallel MD per MD-pool GPU; runtime-adjustable via dashboard
+DOCK_ENGINE=vina                       # peptide-design docking: vina (default, rigid AutoDock Vina 1.2.7) | smina (flexible side chains) | auto
 MD_MOCK_SPEEDUP=2000                   # mock engine: ns of "simulation" per real second
 TRAJECTORY_OUTPUT_PS=100               # default xtc interval
 RETENTION_DAYS=30
@@ -130,8 +134,17 @@ Exactly per PDR §18. Table names lowercase plural.
 | memory_used | float | MiB |
 | memory_total | float | MiB |
 | temperature | float | C |
-| assigned_subjob_id | str nullable | |
+| assigned_subjob_id | str nullable | most-recent claimer (display); occupancy is `running_count` |
+| pool | str | `md` \| `design` \| `excluded` (workload partition; see §1 env) |
+| capacity | int | max concurrent subjobs on this GPU (parallel MD); default 1 |
+| running_count | int | slots currently in use (0..capacity); authoritative occupancy |
 | updated_at | datetime | |
+
+GPU claim/release is slot-counted: a GPU is claimable while `running_count < capacity` and not
+admin-blocked. `request_gpu(subjob_id, pool)` atomically takes a slot on the least-loaded GPU
+in `pool` and binds it to the subjob (`SubJob.assigned_gpu`); release decrements only when it
+clears that binding, so duplicate/concurrent calls cannot double-count. `excluded` GPUs are
+never scheduled.
 
 ### joblogs
 | col | type | notes |
@@ -213,6 +226,33 @@ other than `/auth/login` require auth. Admin-only endpoints checked by role.
 - `POST /api/gpus/{gpu_id}/enable` admin → GpuStatus.
 - `POST /api/gpus/{gpu_id}/disable` admin → GpuStatus.
 - `POST /api/gpus/{gpu_id}/maintenance` admin → GpuStatus.
+- `PATCH /api/gpus/concurrency` admin, body `{pool: "md"|"design", concurrency: 1..16}` → `[GpuStatus]` (sets parallel-MD slots per GPU in the pool; running subjobs are never evicted; persists across restart).
+
+### Peptide design (GA) (§19.6)
+- `POST /api/design` (multipart) → `DesignJob`. Form fields: `name`, `initial_sequences`
+  (comma/space/newline-separated, all one length, standard AAs), `population_size`,
+  `num_generations`, `top_k_md`, `md_length_ns`, `exhaustiveness`, `eval_mode`
+  (`hybrid`|`md_only`), `dock_engine` (`vina`|`smina`|`gnina`|`auto`), `compound_name`; plus a
+  `compound` file (.sdf/.mol/.mol2/.pdb/.smi) OR a `smiles` string. Runs on the GPU design pool.
+- `GET /api/design` → `[DesignJob]` (own jobs; admin sees all).
+- `GET /api/design/{id}` → `DesignJobDetail` = `{job, candidates[] (leaderboard, fitness desc),
+  generations[] (best-so-far convergence curve)}`.
+- `POST /api/design/{id}/cancel` → `DesignJob` (status cancelled; runner aborts between generations).
+
+GA: fixed-length peptide (= initial length), genes are AA indices 0..19. Per-generation
+`eval_mode`: `hybrid` (default — dock ALL candidates, MD-refine only the top-k by docking
+score; fitness = −ΔG for refined elites else −docking_score) or `md_only` (MD-refine EVERY
+candidate; fitness = −ΔG for all — most accurate, most costly). Docking always runs (it
+produces the MD start pose). Tables `designjobs` + `designcandidates`.
+
+Docking engine (DOCK_ENGINE / per-run `dock_engine`: vina | smina | gnina | auto): **Vina** is
+the DEFAULT (AutoDock Vina 1.2.7, rigid, deterministic); **Smina** opt-in (flexible receptor
+side chains via `--flexdist`); **Gnina** opt-in (Smina/Vina fork + CNN scoring, GPU — requires
+the `gnina` binary; uses Vina-style minimizedAffinity for GA-comparable fitness); `auto` = smina
+if installed else vina (never gnina). The peptide is the RECEPTOR, the SMILES compound the
+LIGAND. NOTE: AutoDock CrankPep / HADDOCK / FlexPepDock were evaluated and are NOT supported —
+they dock a peptide INTO a protein (the inverse direction) and have no usable small-molecule→
+peptide path. Docking is a COARSE pre-screen; MD + MM/GBSA is the real ranking arbiter.
 
 ### Results (§19.6)
 - `GET /api/jobs/{job_id}/results` → `{job, subjobs:[{...,analysis_summary, plots_available:[PlotType], has_trajectory, has_movie}]}`.

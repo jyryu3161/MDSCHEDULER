@@ -260,6 +260,9 @@ class GpuStatusOut(BaseModel):
     memory_total: float
     temperature: float
     assigned_subjob_id: str | None = None
+    pool: Literal["md", "design", "excluded"] = "md"
+    capacity: int = Field(default=1, ge=0)          # max concurrent subjobs on this GPU
+    running_count: int = Field(default=0, ge=0)     # slots currently in use (0..capacity)
     updated_at: datetime
 
 
@@ -311,6 +314,101 @@ class JobResults(BaseModel):
 class SubJobResultDetail(BaseModel):
     subjob: SubJobResult
     pose_comparison: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Peptide design (GA)
+# ---------------------------------------------------------------------------
+
+
+class DesignJobCreate(BaseModel):
+    """Create a peptide-design GA job. The compound is supplied separately (file upload or
+    SMILES) by the router; this is the JSON config carried alongside it."""
+
+    name: str = Field(min_length=1, max_length=255)
+    initial_sequences: list[str] = Field(min_length=1)   # all must share one length
+    population_size: int = Field(default=10, ge=2, le=200)
+    num_generations: int = Field(default=5, ge=1, le=100)
+    top_k_md: int = Field(default=2, ge=1, le=50)
+    md_length_ns: int = Field(default=10, ge=1, le=1000)
+    exhaustiveness: int = Field(default=8, ge=1, le=64)
+    # Per-generation evaluation policy: "hybrid" (dock all -> MD top-k, efficient, default) or
+    # "md_only" (MD every candidate, most accurate, most costly).
+    eval_mode: Literal["hybrid", "md_only"] = "hybrid"
+    # Docking engine for this run (selectable at GA launch): vina (default) | smina | gnina | auto.
+    dock_engine: Literal["vina", "smina", "gnina", "auto"] = "vina"
+    # SMILES is written to disk as compound.smi; cap it so it can't bypass the upload size limit.
+    smiles: str | None = Field(default=None, max_length=10000)
+    compound_name: str = Field(default="compound", max_length=255)  # matches DB String(255)
+
+    @field_validator("initial_sequences")
+    @classmethod
+    def _validate_sequences(cls, seqs: list[str]) -> list[str]:
+        cleaned = [s.strip().upper() for s in seqs if s and s.strip()]
+        if not cleaned:
+            raise ValueError("initial_sequences must contain at least one peptide.")
+        valid_aa = set("ARNDCQEGHILKMFPSTWYV")
+        lengths = {len(s) for s in cleaned}
+        if len(lengths) != 1:
+            raise ValueError(f"All initial sequences must share one length; got lengths {sorted(lengths)}.")
+        for s in cleaned:
+            bad = sorted(set(s) - valid_aa)
+            if bad:
+                raise ValueError(f"Sequence {s!r} has non-standard amino acids: {bad}.")
+        return cleaned
+
+
+class DesignCandidateOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    generation: int
+    sequence: str
+    docking_score: float | None = None
+    md_dg: float | None = None
+    fitness: float = 0.0
+    refined: bool = False
+
+
+class DesignJobOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: int
+    name: str
+    status: str
+    compound_name: str
+    peptide_length: int
+    population_size: int
+    num_generations: int
+    top_k_md: int
+    md_length_ns: int
+    eval_mode: str = "hybrid"
+    dock_engine: str = "vina"
+    current_generation: int
+    progress: float
+    assigned_gpu: int | None = None
+    best_sequence: str | None = None
+    best_fitness: float | None = None
+    best_docking_score: float | None = None
+    best_md_dg: float | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error_message: str | None = None
+
+
+class DesignGenerationPoint(BaseModel):
+    generation: int
+    best_fitness: float
+    best_sequence: str
+    best_docking_score: float | None = None
+    best_md_dg: float | None = None
+
+
+class DesignJobDetail(BaseModel):
+    job: DesignJobOut
+    candidates: list[DesignCandidateOut] = Field(default_factory=list)   # leaderboard (best first)
+    generations: list[DesignGenerationPoint] = Field(default_factory=list)  # convergence curve
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,9 @@ import axios, { AxiosError, AxiosInstance } from "axios";
 import type {
   ApiErrorDetail,
   DashboardSummary,
+  DesignJob,
+  DesignJobCreate,
+  DesignJobDetail,
   GpuStatus,
   Job,
   JobCreate,
@@ -237,6 +240,46 @@ export const gpuApi = {
   },
   async maintenance(gpuId: number): Promise<GpuStatus> {
     const { data } = await http.post<GpuStatus>(`/gpus/${gpuId}/maintenance`);
+    return data;
+  },
+  async setConcurrency(pool: "md" | "design", concurrency: number): Promise<GpuStatus[]> {
+    const { data } = await http.patch<GpuStatus[]>("/gpus/concurrency", { pool, concurrency });
+    return data;
+  },
+};
+
+// ── Peptide design (GA) (CONTRACT §5 Design) ─────────────────────────────────
+
+export const designApi = {
+  async list(): Promise<DesignJob[]> {
+    const { data } = await http.get<DesignJob[]>("/design");
+    return data;
+  },
+  async get(designId: string): Promise<DesignJobDetail> {
+    const { data } = await http.get<DesignJobDetail>(`/design/${designId}`);
+    return data;
+  },
+  async create(payload: DesignJobCreate): Promise<DesignJob> {
+    const form = new FormData();
+    form.append("name", payload.name);
+    form.append("initial_sequences", payload.initial_sequences);
+    form.append("population_size", String(payload.population_size));
+    form.append("num_generations", String(payload.num_generations));
+    form.append("top_k_md", String(payload.top_k_md));
+    form.append("md_length_ns", String(payload.md_length_ns));
+    form.append("exhaustiveness", String(payload.exhaustiveness));
+    form.append("eval_mode", payload.eval_mode);
+    form.append("dock_engine", payload.dock_engine);
+    form.append("compound_name", payload.compound_name);
+    if (payload.smiles) form.append("smiles", payload.smiles);
+    if (payload.compound) form.append("compound", payload.compound);
+    const { data } = await http.post<DesignJob>("/design", form, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+    return data;
+  },
+  async cancel(designId: string): Promise<DesignJob> {
+    const { data } = await http.post<DesignJob>(`/design/${designId}/cancel`);
     return data;
   },
 };

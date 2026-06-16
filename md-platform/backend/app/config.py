@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     GPU_ASSIGNMENT_MODE: str = "one_job_per_gpu"
 
     MD_ENGINE: str = "auto"  # gromacs | mock | auto
+    DOCK_ENGINE: str = "vina"  # peptide-design docking: vina (default, AutoDock Vina 1.2.7, rigid) | smina (flexible side chains) | auto
     PROTEIN_FORCE_FIELD: str = "amber14sb"
     LIGAND_FORCE_FIELD: str = "gaff2"
     LIGAND_CHARGE_METHOD: str = "am1bcc"
@@ -90,6 +91,15 @@ class Settings(BaseSettings):
     INTERNAL_API_TOKEN: str = "internal-worker-token-change-me"
 
     NUM_GPUS: str = "auto"  # auto | integer-as-string
+
+    # GPU pool partitioning (CONTRACT §2 gpustatus.pool). MD jobs run on the MD pool; the
+    # peptide-design subsystem runs on the design pool, so the two never contend for a device.
+    # Comma-separated GPU ids; empty MD_GPU_IDS => "all GPUs not in the design pool".
+    MD_GPU_IDS: str = ""
+    DESIGN_GPU_IDS: str = ""
+    # How many MD subjobs may share one MD-pool GPU (parallel MD). Default 1 = current
+    # behavior; adjustable at runtime from the dashboard (persisted to gpustatus.capacity).
+    MD_GPU_CONCURRENCY: int = 1
 
     MD_MOCK_SPEEDUP: int = 2000
     TRAJECTORY_OUTPUT_PS: int = 100
@@ -147,6 +157,53 @@ class Settings(BaseSettings):
             n = int(val)
             return max(n, 0)
         except ValueError:
+            return 1
+
+
+    @staticmethod
+    def _parse_ids(spec: str, valid: set[int]) -> list[int]:
+        out: list[int] = []
+        for tok in str(spec or "").replace(";", ",").split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            try:
+                gid = int(tok)
+            except ValueError:
+                continue
+            if gid in valid and gid not in out:
+                out.append(gid)
+        return out
+
+    def resolved_gpu_pools(self) -> dict[int, str]:
+        """Map each GPU id -> pool ("md" | "design" | "excluded").
+
+        DESIGN_GPU_IDS takes precedence on overlap. When MD_GPU_IDS is set, only those ids form
+        the MD pool and any GPU in neither list is "excluded" (unmanaged — left free for other
+        lab use). When MD_GPU_IDS is empty, every non-design GPU is MD. Ids outside the detected
+        device range are dropped (validation) rather than silently scheduled.
+        """
+        valid = set(range(self.resolved_num_gpus()))
+        design = set(self._parse_ids(self.DESIGN_GPU_IDS, valid))
+        md_spec = self._parse_ids(self.MD_GPU_IDS, valid)
+        if self.MD_GPU_IDS.strip():
+            md = set(md_spec) - design          # explicit MD pool; unlisted GPUs are excluded
+        else:
+            md = valid - design                 # default: claim every non-design GPU for MD
+
+        def _pool(gid: int) -> str:
+            if gid in design:
+                return "design"
+            if gid in md:
+                return "md"
+            return "excluded"
+
+        return {gid: _pool(gid) for gid in valid}
+
+    def resolved_md_concurrency(self) -> int:
+        try:
+            return max(1, int(self.MD_GPU_CONCURRENCY))
+        except (TypeError, ValueError):
             return 1
 
 

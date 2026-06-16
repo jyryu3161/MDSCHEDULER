@@ -11,6 +11,7 @@ import {
 import { useAuth } from "../auth";
 import { Card, ErrorBanner, ProgressBar, StatCard } from "../components/ui";
 import { DataTable, type Column } from "../components/DataTable";
+import { DashboardTabs } from "../components/DashboardTabs";
 import { GpuStatusBadge, JobStatusBadge } from "../components/StatusBadge";
 import { formatDuration, formatGb, formatNumber, formatRelative } from "../format";
 import type {
@@ -270,6 +271,8 @@ export function Dashboard() {
           {live ? "Live" : "Polling"}
         </span>
       </div>
+
+      <DashboardTabs />
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 

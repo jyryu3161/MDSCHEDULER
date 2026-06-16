@@ -255,32 +255,25 @@ def cancel_job(db: Session, job: Job) -> Job:
     A worker that reports progress for an already-cancelled subjob is ignored by the
     internal status handler (see ``apply_subjob_status``), preventing resurrection.
     """
-    from ..models import GpuStatus, GpuStatusEnum
+    from . import gpu_manager
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    # Single transaction: cancel non-terminal subjobs, release their GPU locks, and
-    # cancel the parent job, then commit once. Either all of it lands or none does.
+    # Single transaction: cancel non-terminal subjobs, release their GPU slots, and cancel the
+    # parent job, then commit once — all of it lands or none does.
     #
-    # Atomic compare-and-swap: flip ONLY non-terminal subjobs to cancelled in a
-    # conditional UPDATE so a subjob the worker completed between our read and write
-    # is not clobbered (its row no longer matches the WHERE clause).
+    # Atomic compare-and-swap: flip ONLY non-terminal subjobs to cancelled in a conditional
+    # UPDATE so a subjob the worker completed between our read and write is not clobbered.
+    subjob_ids = db.execute(select(SubJob.id).where(SubJob.job_id == job.id)).scalars().all()
     db.execute(
         update(SubJob)
         .where(SubJob.job_id == job.id, SubJob.status.notin_(JobStatus.TERMINAL_SET))
         .values(status=JobStatus.CANCELLED, current_step="cancelled", completed_at=now)
     )
-    # Free GPU locks held by any subjob of this job, inline (no inner commit), so the
-    # release participates in this same transaction.
-    subjob_ids = db.execute(select(SubJob.id).where(SubJob.job_id == job.id)).scalars().all()
-    if subjob_ids:
-        held = db.execute(
-            select(GpuStatus).where(GpuStatus.assigned_subjob_id.in_(subjob_ids))
-        ).scalars().all()
-        for row in held:
-            if row.status == GpuStatusEnum.BUSY:
-                row.status = GpuStatusEnum.AVAILABLE
-            row.assigned_subjob_id = None
-            row.updated_at = now
+    # Release each subjob's GPU slot via the slot-counted source of truth (decrements
+    # running_count, not just clears the marker) WITHOUT committing, so it participates in this
+    # transaction. Guarded against a concurrent worker release, so it can't double-decrement.
+    for sid in subjob_ids:
+        gpu_manager.release_gpu(db, sid, commit=False)
     job.status = JobStatus.CANCELLED
     job.completed_at = now
     db.commit()
@@ -293,18 +286,23 @@ def retry_job(db: Session, job: Job) -> tuple[Job, list[SubJob]]:
 
     Raises ValueError if nothing is retryable so the router can map it to 409.
     """
+    from . import gpu_manager
+
     subjobs = db.execute(select(SubJob).where(SubJob.job_id == job.id)).scalars().all()
     to_requeue = [s for s in subjobs if s.status in (JobStatus.FAILED, JobStatus.CANCELLED)]
     if not to_requeue:
         raise ValueError("No failed or cancelled poses to retry.")
     for sj in to_requeue:
+        # Release any GPU slot the subjob still holds BEFORE clearing its assignment, so
+        # running_count is decremented (not leaked). Non-committing -> part of this transaction.
+        gpu_manager.release_gpu(db, sj.id, commit=False)
         sj.status = JobStatus.QUEUED
         sj.current_step = "queued"
         sj.progress = 0.0
         sj.completed_ns = 0.0
         sj.ns_per_day = 0.0
         sj.error_message = None
-        sj.assigned_gpu = None
+        sj.assigned_gpu = None  # release_gpu already cleared it; explicit for clarity
         sj.started_at = None
         sj.completed_at = None
     job.status = JobStatus.QUEUED
