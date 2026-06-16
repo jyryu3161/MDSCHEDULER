@@ -311,16 +311,25 @@ function PoseResults({
         </div>
       )}
 
-      {/* Binding free energy (MM/PBSA & MM/GBSA), shown only when computed */}
+      {/* Relative binding score (MM/GBSA & MM/PBSA), shown only when computed */}
       {subjob.mmpbsa && (
         <div className="mb-5">
           <h3 className="mb-2 text-sm font-semibold text-slate-700">
-            Binding free energy (ΔG)
+            Relative binding score (MM/GBSA)
           </h3>
+          {subjob.mmpbsa.reliable === false && (
+            <div className="mb-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              ⚠ Pose occupancy{" "}
+              {typeof subjob.mmpbsa.pose_occupancy === "number"
+                ? `${(subjob.mmpbsa.pose_occupancy * 100).toFixed(0)}%`
+                : "low"}{" "}
+              — the ligand did not stay bound, so this score is unreliable (treat as a weak/failed binder).
+            </div>
+          )}
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-md bg-emerald-50 p-3">
               <div className="text-xs font-medium uppercase tracking-wide text-emerald-700">
-                MM/GBSA ΔG
+                MM/GBSA score
               </div>
               <div className="mt-0.5 text-sm font-semibold text-slate-800">
                 {typeof subjob.mmpbsa.gbsa_dg_kcal_mol === "number"
@@ -330,7 +339,7 @@ function PoseResults({
             </div>
             <div className="rounded-md bg-emerald-50 p-3">
               <div className="text-xs font-medium uppercase tracking-wide text-emerald-700">
-                MM/PBSA ΔG
+                MM/PBSA score
               </div>
               <div className="mt-0.5 text-sm font-semibold text-slate-800">
                 {typeof subjob.mmpbsa.pbsa_dg_kcal_mol === "number"
@@ -338,6 +347,16 @@ function PoseResults({
                   : "—"}
               </div>
             </div>
+            {typeof subjob.mmpbsa.pose_occupancy === "number" && (
+              <div className="rounded-md bg-slate-50 p-3">
+                <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Pose occupancy
+                </div>
+                <div className="mt-0.5 text-sm font-semibold text-slate-800">
+                  {(subjob.mmpbsa.pose_occupancy * 100).toFixed(0)}% bound
+                </div>
+              </div>
+            )}
             {subjob.mmpbsa.frames && (
               <div className="rounded-md bg-slate-50 p-3">
                 <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
@@ -351,8 +370,10 @@ function PoseResults({
           </div>
           <p className="mt-1.5 text-xs text-slate-500">
             {subjob.mmpbsa.method ? `${subjob.mmpbsa.method}. ` : ""}
-            Relative ranking / experimental-trend comparison (no entropy term); absolute ΔG is
-            not quantitatively accurate.
+            <strong>Relative ranking score, not an absolute ΔG/Kd</strong> — single-trajectory, no
+            entropy term, implicit-solvent end-state. Valid for ranking similar ligands against the
+            same pose; differences &lt; ~1.4 kcal/mol are within noise. From a single replicate, so
+            it carries no statistical error bar.
           </p>
         </div>
       )}

@@ -375,6 +375,10 @@ export interface MmpbsaResult {
   pbsa_dg_kcal_mol?: number;
   method?: string;
   frames?: string;
+  score_type?: string;          // "relative_ranking" — not an absolute ΔG
+  pose_occupancy?: number | null; // fraction of trajectory the ligand stayed bound
+  reliable?: boolean;           // false when occupancy < 0.5 (score untrustworthy)
+  warning?: string;
   [k: string]: unknown;
 }
 

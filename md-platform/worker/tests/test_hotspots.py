@@ -41,6 +41,8 @@ def test_bound_window_empty_is_not_fully_bound():
     bw = _bound_window([], [], 5.0)
     assert bw["n_bound_frames"] == 0
     assert bw["fully_bound"] is False
+    assert bw["pose_occupancy"] == 0.0      # no frames -> nothing bound
+    assert bw["occupancy_ok"] is False
 
 
 def test_bound_window_frame0_already_unbound():
@@ -48,6 +50,35 @@ def test_bound_window_frame0_already_unbound():
     bw = _bound_window([9.0, 1.0], [0.0, 1.0], 5.0)
     assert bw["n_bound_frames"] == 0
     assert bw["fully_bound"] is False
+    # Leading window is empty, but frame 1 (1.0 Å) is still counted by whole-trajectory occupancy.
+    assert bw["pose_occupancy"] == 0.5
+    assert bw["occupancy_ok"] is True       # 0.5 >= 0.5 threshold (inclusive boundary)
+
+
+def test_pose_occupancy_counts_whole_trajectory_not_leading_window():
+    # Ligand leaves the pocket after frame 1, then RE-BINDS at frames 6-9. The leading bound
+    # window is short (2 frames), but pose occupancy reflects the WHOLE trajectory: 6/10 bound.
+    times = [round(i * 0.5, 4) for i in range(10)]
+    lig = [0.0, 1.0, 9.0, 9.0, 9.0, 9.0, 1.0, 1.0, 1.0, 1.0]  # bind, leave, rebind
+    bw = _bound_window(lig, times, 3.0)
+    assert bw["n_bound_frames"] == 2           # leading contiguous segment (frames 0-1)
+    assert bw["pose_occupancy"] == 0.6         # 6 of 10 frames < 3.0 Å
+    assert bw["occupancy_ok"] is True          # 0.6 >= 0.5 default threshold
+
+
+def test_pose_occupancy_low_flags_unreliable():
+    # Dissociates early and never returns: only 2/10 frames bound -> below the 0.5 threshold.
+    times = [round(i * 0.5, 4) for i in range(10)]
+    lig = [0.0, 1.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0]
+    bw = _bound_window(lig, times, 3.0)
+    assert bw["pose_occupancy"] == 0.2
+    assert bw["occupancy_ok"] is False
+
+
+def test_pose_occupancy_fully_bound_is_one():
+    bw = _bound_window([0.0, 1.0, 2.0], [0.0, 1.0, 2.0], 3.0)
+    assert bw["pose_occupancy"] == 1.0
+    assert bw["occupancy_ok"] is True
 
 
 # ── _residue_contacts ────────────────────────────────────────────────────────

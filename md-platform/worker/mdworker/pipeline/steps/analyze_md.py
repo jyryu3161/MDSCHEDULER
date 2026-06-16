@@ -29,7 +29,13 @@ from mdworker.pipeline import structures as struct
 _POLAR = {"N", "O", "F", "S"}
 _HBOND_CUTOFF = 3.5      # Angstrom, heavy-atom donor/acceptor proximity proxy
 _CONTACT_CUTOFF = 4.5    # Angstrom, residue-ligand contact
-_BOUND_RMSD_CUTOFF = 5.0  # Angstrom, ligand RMSD below which the pose is "still in the pocket"
+# Ligand RMSD (Å) below which the pose counts as "bound". Tightened from 5.0 to 3.0: 5 Å is
+# effectively "still in the neighborhood", not bound, which inflates the bound window and biases
+# the binding-energy estimate favorable (per the peptide-binding MD-conditions review).
+_BOUND_RMSD_CUTOFF = 3.0
+# Below this pose occupancy the complex isn't reliably bound, so a binding-energy estimate over
+# the (short) bound window is not trustworthy — flag it for the user.
+_LOW_OCCUPANCY = 0.5
 
 
 def _fig(traces: List[dict], title: str, xaxis: str, yaxis: str, *, extra_layout: dict | None = None) -> dict:
@@ -256,9 +262,15 @@ def run(ctx, settings, *, md: Dict[str, Any]) -> Dict[str, Any]:
     bw = _bound_window(lig_rmsd, times_ns, _BOUND_RMSD_CUTOFF)
     summary["bound_window"] = bw
     bound_idx = list(range(bw["n_bound_frames"]))
-    ctx.info(step, "Bound window: {0:.3f}–{1:.3f} ns ({2}/{3} frames, ligand RMSD < {4:g} Å){5}."
+    summary["metrics"]["pose_occupancy"] = bw["pose_occupancy"]
+    ctx.info(step, "Bound window: {0:.3f}–{1:.3f} ns ({2}/{3} frames, ligand RMSD < {4:g} Å); "
+             "pose occupancy {5:.0%} of trajectory{6}."
              .format(bw["start_ns"], bw["end_ns"], bw["n_bound_frames"], bw["n_total_frames"],
-                     _BOUND_RMSD_CUTOFF, "" if not bw["fully_bound"] else " — bound throughout"))
+                     _BOUND_RMSD_CUTOFF, bw["pose_occupancy"],
+                     "" if bw["occupancy_ok"] else " — LOW: complex not reliably bound, binding-energy estimate untrustworthy"))
+    if not bw["occupancy_ok"]:
+        ctx.warning(step, f"Pose occupancy {bw['pose_occupancy']:.0%} < {_LOW_OCCUPANCY:.0%}: the ligand does "
+                          "not stay bound; any MM/GBSA estimate over the short bound window is unreliable.")
 
     # ---- per-residue contacts + H-bonds over the bound window (unified-hotspot inputs)
     # Computed over the bound window only: contacts/H-bonds after dissociation would dilute
@@ -441,7 +453,7 @@ def _bound_window(lig_rmsd, times_ns, cutoff: float) -> Dict[str, Any]:
     if n == 0:
         return {
             "start_ns": 0.0, "end_ns": 0.0, "n_bound_frames": 0, "n_total_frames": 0,
-            "ligand_rmsd_cutoff_A": cutoff,
+            "ligand_rmsd_cutoff_A": cutoff, "pose_occupancy": 0.0, "occupancy_ok": False,
             "criterion": f"leading contiguous frames with ligand RMSD < {cutoff:g} Angstrom",
             "fully_bound": False,
         }
@@ -451,12 +463,18 @@ def _bound_window(lig_rmsd, times_ns, cutoff: float) -> Dict[str, Any]:
             last = i
         else:
             break
+    # Pose occupancy = fraction of the WHOLE trajectory bound (not just the leading segment).
+    # Reported honestly so a complex that dissociates can't be scored as if stably bound; the
+    # MM/GBSA window still uses the leading bound segment, but occupancy tells the real story.
+    occupancy = round(sum(1 for r in lig_rmsd if r < cutoff) / n, 4)
     return {
         "start_ns": times_ns[0] if len(times_ns) > 0 else 0.0,
         "end_ns": times_ns[last] if last >= 0 and len(times_ns) > last else 0.0,
         "n_bound_frames": last + 1,
         "n_total_frames": n,
         "ligand_rmsd_cutoff_A": cutoff,
+        "pose_occupancy": occupancy,                 # fraction of ALL frames with RMSD < cutoff
+        "occupancy_ok": occupancy >= _LOW_OCCUPANCY,  # False => not reliably bound; ΔG untrustworthy
         "criterion": f"leading contiguous frames with ligand RMSD < {cutoff:g} Angstrom",
         "fully_bound": n > 0 and last == n - 1,
     }

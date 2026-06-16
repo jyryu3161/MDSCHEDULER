@@ -296,13 +296,30 @@ def run(ctx, settings, *, md: Dict[str, Any]) -> Dict[str, Any]:
         return {"skipped": True, "reason": f"gmx_MMPBSA rc={proc.returncode}"}
 
     dg = _parse_dg(results_dat)
+    # Pose occupancy from analyze_md (fraction of the trajectory the ligand stayed bound):
+    # a single-trajectory, entropy-free MM/GBSA number is only meaningful if the complex was
+    # actually bound, so we carry occupancy + a reliability flag into the result.
+    occ = None
+    try:
+        s = json.loads((ctx.analysis_dir / "summary.json").read_text())
+        occ = (s.get("bound_window") or {}).get("pose_occupancy")
+    except Exception:  # noqa: BLE001
+        pass
     summary = {
         "method": "MM/GBSA(igb5) + MM/PBSA, single-trajectory, no entropy",
+        # Factual flag: this number is a relative ranking score, not an absolute ΔG/Kd. The UI and
+        # docs carry the full interpretation; here we just record the policy so consumers don't
+        # mislabel it.
+        "score_type": "relative_ranking",
         "frames": f"{startframe}-{endframe}:{interval}",
         "window_basis": window_basis,
+        "pose_occupancy": occ,
+        "reliable": (occ is not None and occ >= 0.5),
         "receptor_group": rec, "ligand_group": lig,
         **dg,
     }
+    if occ is not None and occ < 0.5:
+        summary["warning"] = f"pose_occupancy {occ:.2f} < 0.5: ligand not reliably bound; score unreliable"
     if bound_end_ns is not None:
         summary["bound_window_ns"] = [0.0, round(float(bound_end_ns), 4)]
     (ctx.analysis_dir / "mmpbsa.json").write_text(json.dumps(summary, indent=2))
