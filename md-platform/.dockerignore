@@ -1,0 +1,49 @@
+# Root build context is the md-platform/ root for ALL images (worker/backend/frontend
+# Dockerfiles + Dockerfile.allinone all use `context: .`). Keep source dirs (backend/, worker/,
+# frontend/, md-env/) — only exclude secrets, VCS, caches, build artifacts and runtime data so
+# they are never sent to the Docker daemon / a remote builder, never baked into an image, and the
+# context stays small.
+
+# Secrets / environment (provided at runtime via compose env_file, never baked)
+.env
+.env.*
+!.env.example
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Node (installed in-image via npm ci; dist is built in-image)
+**/node_modules
+frontend/dist
+npm-debug.log*
+yarn-error.log*
+
+# Python caches / virtualenvs / test + build artifacts
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+.venv
+venv
+*.egg
+
+# Runtime data: SQLite DBs, persisted volumes, uploaded/produced job artifacts
+*.db
+*.sqlite3
+storage/uploads/*
+storage/jobs/*
+storage/results/*
+!storage/**/.gitkeep
+postgres_data
+redis_data
+
+# Logs / OS / editor junk
+*.log
+.DS_Store
+Thumbs.db
+.idea
+.vscode
