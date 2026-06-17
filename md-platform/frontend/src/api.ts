@@ -269,7 +269,7 @@ export const designApi = {
     form.append("initial_sequences", payload.initial_sequences);
     form.append("population_size", String(payload.population_size));
     form.append("num_generations", String(payload.num_generations));
-    form.append("top_k_md", String(payload.top_k_md));
+    form.append("dock_oversample", String(payload.dock_oversample));
     form.append("md_length_ns", String(payload.md_length_ns));
     form.append("n_replicas", String(payload.n_replicas));
     form.append("exhaustiveness", String(payload.exhaustiveness));

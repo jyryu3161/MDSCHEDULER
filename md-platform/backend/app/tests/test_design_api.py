@@ -61,7 +61,7 @@ def test_create_design_with_smiles(client):
     h = _auth(client)
     r = client.post("/api/design", headers=h, data={
         "name": "smiles design", "initial_sequences": "KCCIVYP, AAAAAAA GGGGGGG",
-        "population_size": 6, "num_generations": 3, "top_k_md": 2,
+        "population_size": 6, "num_generations": 3, "dock_oversample": 2,
         "md_length_ns": 10, "smiles": "CC(=O)Oc1ccccc1C(=O)O", "compound_name": "aspirin",
     })
     assert r.status_code == 201, r.text

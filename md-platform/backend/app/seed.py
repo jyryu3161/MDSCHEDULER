@@ -24,6 +24,7 @@ def ensure_design_columns(db: Session) -> None:
         "eval_mode": "ALTER TABLE designjobs ADD COLUMN eval_mode VARCHAR(16) NOT NULL DEFAULT 'hybrid'",
         "dock_engine": "ALTER TABLE designjobs ADD COLUMN dock_engine VARCHAR(16) NOT NULL DEFAULT 'vina'",
         "n_replicas": "ALTER TABLE designjobs ADD COLUMN n_replicas INTEGER NOT NULL DEFAULT 1",
+        "dock_oversample": "ALTER TABLE designjobs ADD COLUMN dock_oversample INTEGER NOT NULL DEFAULT 4",
     }
     changed = False
     for col, stmt in ddl.items():

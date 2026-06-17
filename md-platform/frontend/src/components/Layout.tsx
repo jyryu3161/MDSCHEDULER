@@ -6,7 +6,7 @@ import { useAuth } from "../auth";
 const NAV_LINKS: { to: string; label: string; end?: boolean }[] = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/md", label: "MD" },
-  { to: "/design", label: "Design" },
+  { to: "/design", label: "Peptide Design" },
 ];
 
 function navLinkClass({ isActive }: { isActive: boolean }): string {

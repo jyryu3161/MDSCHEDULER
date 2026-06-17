@@ -43,7 +43,7 @@ def _landscape():
 def test_ga_converges_and_curve_is_monotonic():
     dock, md, _, _ = _landscape()
     res = GA.run_ga(["KCCIVYP", "AAAAAAA", "GGGGGGG"], dock, md,
-                    num_generations=8, population_size=10, top_k_md=2, random_seed=7)
+                    num_generations=8, population_size=10, dock_oversample=2, random_seed=7)
     traj = [g.best_fitness for g in res.generations]
     assert traj == sorted(traj)                      # monotonic non-decreasing (best-so-far)
     assert [g.generation for g in res.generations] == sorted({g.generation for g in res.generations})
@@ -54,17 +54,18 @@ def test_ga_converges_and_curve_is_monotonic():
 
 def test_hybrid_runs_md_far_less_than_docking():
     dock, md, dc, mc = _landscape()
-    GA.run_ga(["KCCIVYP", "AAAAAAA"], dock, md,
-              num_generations=6, population_size=10, top_k_md=2, random_seed=3)
-    assert len(mc["seqs"]) < len(dc["seqs"])          # MD is the expensive minority
-    # MD only ever runs on <= top_k unique sequences per generation
-    assert len(set(mc["seqs"])) <= len(set(dc["seqs"]))
+    res = GA.run_ga(["KCCIVYP", "AAAAAAA"], dock, md,
+                    num_generations=6, population_size=10, dock_oversample=4, random_seed=3)
+    assert len(mc["seqs"]) < len(dc["seqs"])          # MD is the expensive minority (dock 4x pool)
+    # Each generation MD-refines at most population_size (=10) candidates — the docking-screen top-N.
+    for r in res.generations:
+        assert len(r.elites) <= 10, f"gen {r.generation} MD'd {len(r.elites)} > population_size"
 
 
 def test_docking_is_memoized_across_generations():
     dock, md, dc, _ = _landscape()
     GA.run_ga(["KCCIVYP", "AAAAAAA"], dock, md,
-              num_generations=8, population_size=8, top_k_md=2, random_seed=11)
+              num_generations=8, population_size=8, dock_oversample=2, random_seed=11)
     # each unique sequence is docked exactly once despite recurring across generations
     assert len(dc["seqs"]) == len(set(dc["seqs"]))
 
@@ -72,7 +73,7 @@ def test_docking_is_memoized_across_generations():
 def test_best_candidate_uses_md_fitness_when_refined():
     dock, md, _, _ = _landscape()
     res = GA.run_ga(["KCCIVYP", "AAAAAAA", "GGGGGGG"], dock, md,
-                    num_generations=8, population_size=10, top_k_md=3, random_seed=7)
+                    num_generations=8, population_size=10, dock_oversample=3, random_seed=7)
     best = next(c for c in res.candidates if c.sequence == res.best_sequence)
     # In this landscape refined fitness (1.8*sim+1) always exceeds non-refined (sim), so the
     # global best is necessarily MD-refined and its fitness is exactly -md_dg.
@@ -90,7 +91,7 @@ def test_failed_docking_does_not_crash_and_is_deselected():
         return {s: -(1.5 * _sim(s) + 1.0) for s in seqs}
 
     res = GA.run_ga([bad, "IIWWYYP"], dock_batch, md_batch,
-                    num_generations=3, population_size=6, top_k_md=2, random_seed=1)
+                    num_generations=3, population_size=6, dock_oversample=2, random_seed=1)
     failed = next(c for c in res.candidates if c.sequence == bad)
     assert failed.docking_score is None
     assert failed.fitness == GA._FAILED_FITNESS and not failed.refined  # deselected
@@ -102,7 +103,7 @@ def test_small_population_runs_multiple_generations():
     # stop after generation 0. The clamp must keep evolving across all requested generations.
     dock, md, _, _ = _landscape()
     res = GA.run_ga(["AC", "GG"], dock, md, num_generations=4, population_size=2,
-                    top_k_md=1, keep_elitism=2, random_seed=5)
+                    dock_oversample=1, keep_elitism=2, random_seed=5)
     gens = [g.generation for g in res.generations]
     assert max(gens) >= 3, f"GA stopped early — only saw generations {gens}"
 

@@ -51,18 +51,21 @@ def run_design(design_id: str, config: Dict[str, Any], reporter, settings: Dict[
     initial = list(config["initial_sequences"])
     population_size = int(config.get("population_size", 10))
     num_generations = int(config.get("num_generations", 5))
-    top_k_md = int(config.get("top_k_md", 2))
+    # Hybrid docking screen factor: dock population_size × dock_oversample candidates, MD the top
+    # population_size by docking score. (Replaces the old fixed top_k_md knob.)
+    dock_oversample = max(1, int(config.get("dock_oversample", 4)))
     md_length_ns = float(config.get("md_length_ns", 10.0))
     n_replicas = max(1, min(5, int(config.get("n_replicas", 1) or 1)))
     exhaustiveness = int(config.get("exhaustiveness", 16))
-    eval_mode = str(config.get("eval_mode", "hybrid"))  # "hybrid" (dock->top-k MD) | "md_only"
+    eval_mode = str(config.get("eval_mode", "hybrid"))  # "hybrid" (dock pool -> MD top-N) | "md_only"
     md_engine = str(settings.get("MD_ENGINE", "mock")).lower()
     if md_engine == "auto":
         md_engine = "gromacs" if md_eval.gromacs_available() else "mock"
     # Docking engine: default "vina" (AutoDock Vina 1.2.7, rigid); set DOCK_ENGINE=smina for
     # flexible receptor side chains, or "auto" to use smina when installed.
     dock_engine = docking.resolve_engine(str(settings.get("DOCK_ENGINE", "vina")))
-    mode_desc = "dock all -> MD top-%d" % top_k_md if eval_mode == "hybrid" else "dock all -> MD ALL candidates"
+    mode_desc = (f"dock {dock_oversample}x pool ({population_size * dock_oversample}) -> MD top {population_size}"
+                 if eval_mode == "hybrid" else "MD ALL candidates")
     log(f"Eval mode: {eval_mode} ({mode_desc}); docking engine: {dock_engine} "
         f"(exhaustiveness {exhaustiveness}); MD engine: {md_engine}.")
 
@@ -145,7 +148,7 @@ def run_design(design_id: str, config: Dict[str, Any], reporter, settings: Dict[
         result = ga.run_ga(
             initial, dock_batch, md_batch,
             num_generations=num_generations, population_size=population_size,
-            top_k_md=top_k_md, eval_mode=eval_mode, progress=progress,
+            dock_oversample=dock_oversample, eval_mode=eval_mode, progress=progress,
         )
         result_dict = ga.result_to_dict(result)
         (workdir / "design_result.json").write_text(json.dumps(result_dict, indent=2))

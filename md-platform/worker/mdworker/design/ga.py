@@ -177,7 +177,7 @@ def run_ga(
     *,
     num_generations: int = 5,
     population_size: int = 10,
-    top_k_md: int = 2,
+    dock_oversample: int = 4,
     eval_mode: str = "hybrid",
     num_parents_mating: Optional[int] = None,
     mutation_percent_genes: float = 20.0,
@@ -202,13 +202,22 @@ def run_ga(
     seq_len = lengths.pop()
     num_genes = seq_len
 
+    # Hybrid oversampling: dock a larger pool then MD only the best `population_size`. The PyGAD
+    # population (the genomes actually generated + docked each generation) is
+    # population_size × dock_oversample; the docking top-`population_size` are MD-refined. So
+    # `population_size` is the MD budget per generation and `dock_oversample` is the docking
+    # screen factor. md_only does no screen, so the pool == population_size (MD all).
+    oversample = max(1, int(dock_oversample))
+    pool_size = population_size * oversample if eval_mode == "hybrid" else population_size
+    md_per_gen = population_size  # how many of the docked pool get MD-refined (top by docking)
+
     rng = np.random.default_rng(random_seed)
     seed_genes = [sequence_to_indices(s) for s in initial_sequences]
-    while len(seed_genes) < population_size:
+    while len(seed_genes) < pool_size:
         seed_genes.append(list(rng.integers(0, len(AA1), size=num_genes)))
-    initial_population = np.array([g[:num_genes] for g in seed_genes[:population_size]], dtype=int)
+    initial_population = np.array([g[:num_genes] for g in seed_genes[:pool_size]], dtype=int)
 
-    evaluator = HybridEvaluator(dock_batch, md_batch, top_k=top_k_md, eval_mode=eval_mode,
+    evaluator = HybridEvaluator(dock_batch, md_batch, top_k=md_per_gen, eval_mode=eval_mode,
                                 progress=progress)
 
     def fitness_func(ga_instance, solutions, solution_indices):
@@ -217,16 +226,18 @@ def run_ga(
         evaluator.evaluate_population(seqs, generation=ga_instance.generations_completed)
         return [evaluator.fitness_of(s) for s in seqs]
 
-    parents = num_parents_mating or max(2, population_size // 2)
-    # keep_elitism must stay BELOW num_parents_mating (and population_size): PyGAD stops evolving
+    parents = num_parents_mating or max(2, pool_size // 2)
+    # keep_elitism must stay BELOW num_parents_mating (and pool_size): PyGAD stops evolving
     # after generation 0 when keep_elitism >= num_parents_mating, which silently reduces a small
     # population (e.g. pop=2 -> parents=2) to a single-generation run. Clamp accordingly.
-    elitism = max(0, min(keep_elitism, parents - 1, population_size - 1))
+    elitism = max(0, min(keep_elitism, parents - 1, pool_size - 1))
     ga = pygad.GA(
         num_generations=num_generations,
         num_parents_mating=parents,
         fitness_func=fitness_func,
-        fitness_batch_size=population_size,
+        # One batch over the WHOLE oversampled pool so the top-`population_size` MD screen is
+        # across all docked candidates, not per sub-batch.
+        fitness_batch_size=pool_size,
         initial_population=initial_population,
         gene_type=int,
         gene_space=list(range(len(AA1))),     # each gene is an AA index 0..19

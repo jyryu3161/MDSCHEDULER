@@ -370,10 +370,12 @@ class DesignJobCreate(BaseModel):
     initial_sequences: list[str] = Field(min_length=1)   # all must share one length
     population_size: int = Field(default=10, ge=2, le=200)
     num_generations: int = Field(default=5, ge=1, le=100)
-    top_k_md: int = Field(default=2, ge=1, le=50)
+    # Hybrid docking screen factor: dock population_size × dock_oversample candidates per
+    # generation, then MD the top population_size by docking score. (Replaces top_k_md.)
+    dock_oversample: int = Field(default=4, ge=1, le=20)
     md_length_ns: int = Field(default=10, ge=1, le=1000)
     # Independent MD replicas per evaluated candidate; fitness uses the mean ΔG (capped low
-    # because GA cost already scales with population × generations × top_k_md).
+    # because GA cost already scales with population × generations).
     n_replicas: int = Field(default=1, ge=1, le=5)
     exhaustiveness: int = Field(default=8, ge=1, le=64)
     # Per-generation evaluation policy: "hybrid" (dock all -> MD top-k, efficient, default) or
@@ -424,7 +426,7 @@ class DesignJobOut(BaseModel):
     peptide_length: int
     population_size: int
     num_generations: int
-    top_k_md: int
+    dock_oversample: int = 4
     md_length_ns: int
     n_replicas: int = 1
     eval_mode: str = "hybrid"

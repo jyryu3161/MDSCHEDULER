@@ -129,7 +129,7 @@ function CreateDesignForm({ onCreated }: { onCreated: () => void }) {
   const [compoundName, setCompoundName] = useState("compound");
   const [population, setPopulation] = useState(10);
   const [generations, setGenerations] = useState(5);
-  const [topK, setTopK] = useState(2);
+  const [dockOversample, setDockOversample] = useState(4);
   const [mdNs, setMdNs] = useState(10);
   const [mdReplicas, setMdReplicas] = useState(1);
   const [exhaustiveness, setExhaustiveness] = useState(8);
@@ -166,7 +166,7 @@ function CreateDesignForm({ onCreated }: { onCreated: () => void }) {
     try {
       const job = await designApi.create({
         name, initial_sequences: sequences, population_size: population,
-        num_generations: generations, top_k_md: topK, md_length_ns: mdNs,
+        num_generations: generations, dock_oversample: dockOversample, md_length_ns: mdNs,
         n_replicas: mdReplicas, exhaustiveness, eval_mode: evalMode, dock_engine: dockEngine,
         compound_name: compoundName, smiles: smiles.trim() || undefined, compound,
       });
@@ -226,14 +226,15 @@ function CreateDesignForm({ onCreated }: { onCreated: () => void }) {
         <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
           <NumField label="Population" value={population} setValue={setPopulation} min={2} max={200} />
           <NumField label="Generations" value={generations} setValue={setGenerations} min={1} max={100} />
-          <NumField label="Top-k MD" value={topK} setValue={setTopK} min={1} max={50} />
+          <NumField label="Dock ×N (hybrid)" value={dockOversample} setValue={setDockOversample} min={1} max={20} />
           <NumField label="MD length (ns)" value={mdNs} setValue={setMdNs} min={1} max={1000} />
           <NumField label="Replicas/cand." value={mdReplicas} setValue={setMdReplicas} min={1} max={5} />
           <NumField label="Exhaustiveness" value={exhaustiveness} setValue={setExhaustiveness} min={1} max={64} />
         </div>
         <p className="-mt-2 text-xs text-slate-500">
-          Replicas/cand.: independent MD repeats per candidate; fitness uses the mean ΔG
-          (multiplies MD cost by this factor).
+          Dock ×N (hybrid only): each generation docks Population × N candidates and MD-refines the
+          top Population by docking score (N=1 ⇒ MD all docked). Replicas/cand.: independent MD
+          repeats per candidate; fitness uses the mean ΔG (multiplies MD cost).
         </p>
 
         <div className="grid gap-3 sm:grid-cols-2">

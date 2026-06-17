@@ -473,7 +473,7 @@ export interface DesignJob {
   peptide_length: number;
   population_size: number;
   num_generations: number;
-  top_k_md: number;
+  dock_oversample: number;
   md_length_ns: number;
   n_replicas: number;
   eval_mode: DesignEvalMode;
@@ -519,7 +519,7 @@ export interface DesignJobCreate {
   initial_sequences: string;          // comma/space/newline-separated
   population_size: number;
   num_generations: number;
-  top_k_md: number;
+  dock_oversample: number;            // hybrid: dock population×N, MD top population
   md_length_ns: number;
   n_replicas: number;            // MD replicas per evaluated candidate (fitness = mean ΔG)
   exhaustiveness: number;

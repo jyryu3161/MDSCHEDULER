@@ -24,7 +24,7 @@ def _design_config(dj: DesignJob) -> dict:
         "peptide_length": dj.peptide_length,
         "population_size": dj.population_size,
         "num_generations": dj.num_generations,
-        "top_k_md": dj.top_k_md,
+        "dock_oversample": dj.dock_oversample,
         "md_length_ns": dj.md_length_ns,
         "n_replicas": dj.n_replicas,
         "exhaustiveness": dj.exhaustiveness,

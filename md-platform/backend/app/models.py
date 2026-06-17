@@ -300,7 +300,10 @@ class DesignJob(Base):
     peptide_length: Mapped[int] = mapped_column(Integer, nullable=False)
     population_size: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
     num_generations: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    # top_k_md is retained for back-compat with existing rows but no longer used (superseded by
+    # dock_oversample: dock population_size × dock_oversample, then MD the top population_size).
     top_k_md: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    dock_oversample: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
     md_length_ns: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
     # Independent MD replicas per evaluated candidate; GA fitness uses the replica-mean ΔG.
     n_replicas: Mapped[int] = mapped_column(Integer, default=1, nullable=False)

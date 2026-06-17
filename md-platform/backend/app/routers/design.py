@@ -59,7 +59,7 @@ async def create_design(
     initial_sequences: str = Form(..., description="comma/space/newline-separated peptides"),
     population_size: int = Form(10),
     num_generations: int = Form(5),
-    top_k_md: int = Form(2),
+    dock_oversample: int = Form(4),
     md_length_ns: int = Form(10),
     n_replicas: int = Form(1),
     exhaustiveness: int = Form(8),
@@ -75,7 +75,7 @@ async def create_design(
     try:
         cfg = DesignJobCreate(
             name=name, initial_sequences=seqs, population_size=population_size,
-            num_generations=num_generations, top_k_md=top_k_md, md_length_ns=md_length_ns,
+            num_generations=num_generations, dock_oversample=dock_oversample, md_length_ns=md_length_ns,
             n_replicas=n_replicas, exhaustiveness=exhaustiveness, eval_mode=eval_mode,
             dock_engine=dock_engine, smiles=smiles, compound_name=compound_name,
         )
@@ -126,7 +126,7 @@ async def create_design(
             initial_sequences=json.dumps(cfg.initial_sequences),
             peptide_length=len(cfg.initial_sequences[0]),
             population_size=cfg.population_size, num_generations=cfg.num_generations,
-            top_k_md=cfg.top_k_md, md_length_ns=cfg.md_length_ns, n_replicas=cfg.n_replicas,
+            dock_oversample=cfg.dock_oversample, md_length_ns=cfg.md_length_ns, n_replicas=cfg.n_replicas,
             exhaustiveness=cfg.exhaustiveness, eval_mode=cfg.eval_mode, dock_engine=cfg.dock_engine,
             created_at=utcnow(),
         )

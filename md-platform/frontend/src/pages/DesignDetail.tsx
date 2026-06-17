@@ -141,7 +141,7 @@ export function DesignDetail() {
           <p className="text-sm text-slate-500">
             Target: {job.compound_name} · peptide length {job.peptide_length} ·
             population {job.population_size} · {job.num_generations} generations ·{" "}
-            {job.eval_mode === "md_only" ? "MD all" : `top-${job.top_k_md} MD`} @ {job.md_length_ns} ns
+            {job.eval_mode === "md_only" ? "MD all" : `dock ×${job.dock_oversample} → MD top ${job.population_size}`} @ {job.md_length_ns} ns
             {(job.n_replicas ?? 1) > 1 ? ` ×${job.n_replicas} replicas` : ""} ·
             dock: {job.dock_engine}
           </p>
