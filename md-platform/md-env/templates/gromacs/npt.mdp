@@ -1,13 +1,13 @@
-; npt.mdp - NPT equilibration, 100 ps at 300 K / 1 bar (Parrinello-Rahman barostat).
+; npt.mdp - NPT equilibration at 300 K / 1 bar (Parrinello-Rahman barostat).
 ; Position restraints on solute kept during equilibration.
-; Force field: AMBER14SB (protein) + GAFF2 (ligand) + TIP3P (water).
+; Force field resolved by the engine (ff19SB/OPC default, amber14sb/tip3p fallback).
 
 define                  = -DPOSRES -DPOSRES_LIG   ; keep solute restrained
 
 ; Run control
 integrator              = md
 dt                      = 0.002         ; 2 fs
-nsteps                  = 50000         ; 50000 * 2 fs = 100 ps
+nsteps                  = __NSTEPS__     ; engine substitutes from NPT_STEPS (default 125000 = 250 ps)
 
 ; Output control
 nstxout                 = 0

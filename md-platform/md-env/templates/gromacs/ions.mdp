@@ -1,6 +1,6 @@
 ; ions.mdp - minimal parameter file used only to build the .tpr for genion.
 ; genion does not run dynamics; this just lets grompp produce ions.tpr.
-; Force field: AMBER14SB (protein) + GAFF2 (ligand) + TIP3P (water).
+; Force field resolved by the engine (ff19SB/OPC default, amber14sb/tip3p fallback) + GAFF2 ligand.
 
 integrator              = steep         ; placeholder (genion ignores dynamics)
 emtol                   = 1000.0

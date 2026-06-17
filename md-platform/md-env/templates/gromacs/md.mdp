@@ -1,5 +1,5 @@
 ; md.mdp - production MD at 300 K / 1 bar, no position restraints.
-; Force field: AMBER14SB (protein) + GAFF2 (ligand) + TIP3P (water).
+; Force field resolved by the engine (ff19SB/OPC default, amber14sb/tip3p fallback) + GAFF2 ligand.
 ;
 ; The placeholder __NSTEPS__ is substituted by the MD engine at runtime:
 ;   nsteps = round(md_length_ns * 1000 / dt_ps) = md_length_ns * 1000 / 0.002

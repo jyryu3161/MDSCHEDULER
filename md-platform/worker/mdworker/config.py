@@ -58,14 +58,35 @@ class Settings:
     backend_url: str = "http://backend:8000"
     internal_api_token: str = "internal-worker-token-change-me"
 
-    # Force-field / MD chemistry settings (defaults from CONTRACT §1)
-    protein_force_field: str = "amber14sb"
+    # Force-field / MD chemistry settings.
+    # Default to the modern protein FF + 4-point water recommended for binding studies
+    # (ff19SB is parameterized against OPC). These require the ff19SB GROMACS port to be
+    # installed; when it is absent the engine PRE-FLIGHTS the GROMACS top dirs and falls back
+    # to the stock amber14sb + tip3p pair (see *_fallback below) with a logged warning, so the
+    # platform still runs on a plain GROMACS install. Override via PROTEIN_FORCE_FIELD /
+    # WATER_MODEL.
+    protein_force_field: str = "ff19SB"
     ligand_force_field: str = "gaff2"
     ligand_charge_method: str = "am1bcc"
-    water_model: str = "tip3p"
+    water_model: str = "opc"
+    # Fallback pair used when the requested protein_force_field/water_model is not found in the
+    # GROMACS installation. amber14sb + tip3p ship with stock GROMACS.
+    protein_force_field_fallback: str = "amber14sb"
+    water_model_fallback: str = "tip3p"
+    # When True, silently fall back to the *_fallback pair if the requested FF/water is missing.
+    # When False, use the requested pair as-is and let gmx pdb2gmx fail loudly (strict mode).
+    forcefield_autofallback: bool = True
     require_ligand_chemistry: bool = True
     allow_smiles_input: bool = True
     allow_meeko_mapping_input: bool = True
+
+    # Solvation box padding (gmx editconf -d, nm). 1.2 nm keeps the solute well clear of its
+    # periodic image for binding studies (the previous 1.0 nm is on the small side).
+    box_padding_nm: float = 1.2
+    # Equilibration lengths (steps at dt=0.002 ps). NVT 100 ps + NPT 250 ps (was 100 ps) gives
+    # the solvent/box more time to settle around the docked complex before production.
+    nvt_steps: int = 50000     # 100 ps
+    npt_steps: int = 125000    # 250 ps
 
     # MDP template directory for the real GROMACS engine
     mdp_template_dir: str = "/app/md-env/templates/gromacs"
@@ -113,10 +134,13 @@ def load_settings() -> Settings:
         md_engine=_env("MD_ENGINE", "auto"),
         backend_url=_env("BACKEND_URL", "http://backend:8000").rstrip("/"),
         internal_api_token=_env("INTERNAL_API_TOKEN", "internal-worker-token-change-me"),
-        protein_force_field=_env("PROTEIN_FORCE_FIELD", "amber14sb"),
+        protein_force_field=_env("PROTEIN_FORCE_FIELD", "ff19SB"),
         ligand_force_field=_env("LIGAND_FORCE_FIELD", "gaff2"),
         ligand_charge_method=_env("LIGAND_CHARGE_METHOD", "am1bcc"),
-        water_model=_env("WATER_MODEL", "tip3p"),
+        water_model=_env("WATER_MODEL", "opc"),
+        protein_force_field_fallback=_env("PROTEIN_FORCE_FIELD_FALLBACK", "amber14sb"),
+        water_model_fallback=_env("WATER_MODEL_FALLBACK", "tip3p"),
+        forcefield_autofallback=_env_bool("FORCEFIELD_AUTOFALLBACK", True),
         require_ligand_chemistry=_env_bool("REQUIRE_LIGAND_CHEMISTRY", True),
         allow_smiles_input=_env_bool("ALLOW_SMILES_INPUT", True),
         allow_meeko_mapping_input=_env_bool("ALLOW_MEEKO_MAPPING_INPUT", True),
@@ -124,6 +148,9 @@ def load_settings() -> Settings:
         storage_root=_env("STORAGE_ROOT", "/app/storage"),
         trajectory_output_ps=_env_int("TRAJECTORY_OUTPUT_PS", 100),
         md_mock_speedup=_env_int("MD_MOCK_SPEEDUP", 2000),
+        box_padding_nm=_env_float("BOX_PADDING_NM", 1.2),
+        nvt_steps=_env_int("NVT_STEPS", 50000),
+        npt_steps=_env_int("NPT_STEPS", 125000),
         redis_url=_env("REDIS_URL", "redis://redis:6379/0"),
         worker_gpu_id=worker_gpu_id,
     )

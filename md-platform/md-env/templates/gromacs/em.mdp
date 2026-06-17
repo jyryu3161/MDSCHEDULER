@@ -1,5 +1,5 @@
 ; em.mdp - energy minimization (steepest descent).
-; Force field: AMBER14SB (protein) + GAFF2 (ligand) + TIP3P (water).
+; Force field resolved by the engine (ff19SB/OPC default, amber14sb/tip3p fallback) + GAFF2 ligand.
 
 integrator              = steep         ; steepest-descent minimization
 emtol                   = 1000.0        ; converge when max force < 1000 kJ/mol/nm

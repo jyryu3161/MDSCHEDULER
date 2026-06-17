@@ -40,10 +40,16 @@ REDIS_URL=redis://redis:6379/0
 MAX_UPLOAD_SIZE_GB=10
 GPU_ASSIGNMENT_MODE=one_job_per_gpu
 MD_ENGINE=auto                         # gromacs | mock | auto (auto = gromacs if `gmx` on PATH else mock)
-PROTEIN_FORCE_FIELD=amber14sb
+PROTEIN_FORCE_FIELD=ff19SB             # default ff19SB; preflight falls back to *_FALLBACK if absent
+WATER_MODEL=opc                        # ff19SB is parameterized against OPC (4-point) water
+PROTEIN_FORCE_FIELD_FALLBACK=amber14sb # stock pair used when the ff19SB port is not installed
+WATER_MODEL_FALLBACK=tip3p
+FORCEFIELD_AUTOFALLBACK=true           # false = strict (let gmx pdb2gmx fail instead of falling back)
 LIGAND_FORCE_FIELD=gaff2
 LIGAND_CHARGE_METHOD=am1bcc
-WATER_MODEL=tip3p
+BOX_PADDING_NM=1.2                      # gmx editconf -d (solute-to-edge padding, nm)
+NVT_STEPS=50000                        # NVT equilibration steps (dt=0.002 ps -> 100 ps)
+NPT_STEPS=125000                       # NPT equilibration steps (-> 250 ps)
 REQUIRE_LIGAND_CHEMISTRY=true
 ALLOW_SMILES_INPUT=true
 ALLOW_MEEKO_MAPPING_INPUT=true

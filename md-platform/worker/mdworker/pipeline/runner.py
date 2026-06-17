@@ -91,6 +91,9 @@ def _coerce_settings(settings):
             ligand_force_field=pick("LIGAND_FORCE_FIELD", base.ligand_force_field),
             ligand_charge_method=pick("LIGAND_CHARGE_METHOD", base.ligand_charge_method),
             water_model=pick("WATER_MODEL", base.water_model),
+            protein_force_field_fallback=pick("PROTEIN_FORCE_FIELD_FALLBACK", base.protein_force_field_fallback),
+            water_model_fallback=pick("WATER_MODEL_FALLBACK", base.water_model_fallback),
+            forcefield_autofallback=as_bool(d.get("FORCEFIELD_AUTOFALLBACK"), base.forcefield_autofallback),
             require_ligand_chemistry=as_bool(d.get("REQUIRE_LIGAND_CHEMISTRY"), base.require_ligand_chemistry),
             allow_smiles_input=as_bool(d.get("ALLOW_SMILES_INPUT"), base.allow_smiles_input),
             allow_meeko_mapping_input=as_bool(d.get("ALLOW_MEEKO_MAPPING_INPUT"), base.allow_meeko_mapping_input),
@@ -98,6 +101,9 @@ def _coerce_settings(settings):
             storage_root=pick("STORAGE_ROOT", base.storage_root),
             trajectory_output_ps=int(pick("TRAJECTORY_OUTPUT_PS", base.trajectory_output_ps)),
             md_mock_speedup=int(pick("MD_MOCK_SPEEDUP", base.md_mock_speedup)),
+            box_padding_nm=float(pick("BOX_PADDING_NM", base.box_padding_nm)),
+            nvt_steps=int(pick("NVT_STEPS", base.nvt_steps)),
+            npt_steps=int(pick("NPT_STEPS", base.npt_steps)),
             redis_url=pick("REDIS_URL", base.redis_url),
         )
     return load_settings()

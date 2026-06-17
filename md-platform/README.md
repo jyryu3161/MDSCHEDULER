@@ -220,32 +220,55 @@ GPUs are partitioned into pools so MD and peptide design never contend:
 
 The MD dashboard GPU cards show each GPU's pool and slot usage (running / capacity).
 
-## Fixed MD toolchain
+## MD toolchain & conditions
 
-The scientific toolchain is fixed (CONTRACT §1 / PDR §5.4) and provided by the
-`md-env` image:
+The scientific toolchain (CONTRACT §1 / PDR §5.4), provided by the `md-env` image:
 
-| Component            | Choice                              |
+| Component            | Default                             |
 |----------------------|-------------------------------------|
-| Protein force field  | AMBER14SB (`PROTEIN_FORCE_FIELD`)   |
+| Protein force field  | **ff19SB** (`PROTEIN_FORCE_FIELD`); fallback AMBER14SB |
 | Ligand force field   | GAFF2 (`LIGAND_FORCE_FIELD`)        |
 | Ligand charges       | AM1-BCC (`LIGAND_CHARGE_METHOD`)    |
-| Water model          | TIP3P (`WATER_MODEL`)               |
+| Water model          | **OPC** (`WATER_MODEL`); fallback TIP3P |
+| Box padding          | 1.2 nm (`BOX_PADDING_NM`)           |
+| Equilibration        | NVT 100 ps (`NVT_STEPS`) + NPT 250 ps (`NPT_STEPS`) |
 | MD engine            | GROMACS (GPU); mock fallback        |
 | Ligand parameterize  | ACPYPE (`acpype -i lig_ref.sdf -c bcc -a gaff2`) |
 | Bond-order assignment| RDKit `AssignBondOrdersFromTemplate` from the chemistry file (never from PDBQT alone) |
 
-Standard GROMACS `.mdp` templates live in
-`md-env/templates/gromacs/`:
+**ff19SB + OPC** is the default because ff19SB is parameterized against the OPC
+4-point water model and is the current recommendation for binding studies. It
+requires the **ff19SB GROMACS port** (a `ff19SB.ff` directory whose
+`watermodels.dat` lists `opc`) installed on the GROMACS data path. The worker
+**pre-flights** this at run start: if `ff19SB.ff`/OPC is not found it logs a
+warning and falls back to the stock **amber14sb + tip3p** pair
+(`PROTEIN_FORCE_FIELD_FALLBACK` / `WATER_MODEL_FALLBACK`), so a plain GROMACS
+install still runs. Set `FORCEFIELD_AUTOFALLBACK=false` for strict mode (let
+`gmx pdb2gmx` fail loudly instead of falling back). To install the port, drop a
+`ff19SB.ff` directory into `$GMXLIB` or `<gmx-prefix>/share/gromacs/top/`. The
+MM/GBSA step automatically uses the matching AmberTools leaprc
+(`leaprc.protein.ff19SB` vs `oldff/leaprc.ff14SB`) for whichever FF actually ran.
+
+> **Interpreting the binding score.** The single-trajectory, entropy-free
+> MM/GBSA value is a **relative ranking score, not an absolute ΔG/Kd**. Each run
+> also reports **pose occupancy** (fraction of the trajectory the ligand stayed
+> bound); a result with occupancy < 50 % is flagged unreliable. For statistical
+> error bars, run replicas (different seeds) and compare mean ± SEM.
+
+Standard GROMACS `.mdp` templates live in `md-env/templates/gromacs/`:
 
 - `ions.mdp` - minimal, for the genion `grompp`.
 - `em.mdp` - steepest-descent minimization (50000 steps, `emtol` 1000).
-- `nvt.mdp` - 100 ps NVT, V-rescale at 300 K, position restraints.
-- `npt.mdp` - 100 ps NPT, Parrinello-Rahman at 1 bar, position restraints.
+- `nvt.mdp` - NVT, V-rescale at 300 K, position restraints; length `NVT_STEPS`.
+- `npt.mdp` - NPT, Parrinello-Rahman at 1 bar, position restraints; length `NPT_STEPS`.
 - `md.mdp` - production; `dt` 0.002 ps, `__NSTEPS__` and
   `__NSTXOUT_COMPRESSED__` placeholders substituted by the engine from
   `md_length_ns` and `TRAJECTORY_OUTPUT_PS`; two-group thermostat
   (`Protein_MOL` / `Water_and_ions`).
+
+The built-in `nvt.mdp`/`npt.mdp` fallbacks use a `{NSTEPS}` placeholder filled
+from `NVT_STEPS`/`NPT_STEPS`; if you supply your own templates in
+`MDP_TEMPLATE_DIR` with a literal `nsteps`, that literal is used as-is.
 
 The proven reference recipe these encode is `preprocess_pipeline.sh` in the
 parent repository; the worker generalizes it (no hardcoded molecule).

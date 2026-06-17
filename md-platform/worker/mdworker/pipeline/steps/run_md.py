@@ -1,10 +1,12 @@
 """Step 6 — run_md (CONTRACT §9.6).
 
-Assemble complex (receptor + ligand coords) -> box -> solvate (TIP3P) -> genion
-(salt_concentration NaCl) -> EM -> NVT 100ps -> NPT 100ps -> production MD (md_length_ns).
-Status transitions preparing -> running_em -> running_nvt -> running_npt -> running_md are
-emitted by the engine, which also reports ns/day + completed_ns + progress. The engine is
-chosen by MD_ENGINE/auto (gromacs vs mock).
+Assemble complex (receptor + ligand coords) -> box (BOX_PADDING_NM, default 1.2 nm) ->
+solvate -> genion (salt_concentration NaCl) -> EM -> NVT (NVT_STEPS, default 100 ps) ->
+NPT (NPT_STEPS, default 250 ps) -> production MD (md_length_ns). The protein force field +
+water model are resolved by the engine (ff19SB/OPC by default, with preflight fallback to
+amber14sb/tip3p). Status transitions preparing -> running_em -> running_nvt -> running_npt ->
+running_md are emitted by the engine, which also reports ns/day + completed_ns + progress.
+The engine is chosen by MD_ENGINE/auto (gromacs vs mock).
 
 GPU note: the GPU lock is requested by the runner BEFORE this step and passed in via
 assigned_gpu; the engine sets CUDA_VISIBLE_DEVICES for real gmx mdrun.

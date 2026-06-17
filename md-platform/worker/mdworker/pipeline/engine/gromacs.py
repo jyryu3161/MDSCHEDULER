@@ -14,6 +14,7 @@ progress.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -39,7 +40,7 @@ _DEFAULT_MDP: Dict[str, str] = {
         "rcoulomb = 1.0\nrvdw = 1.0\npbc = xyz\n"
     ),
     "nvt.mdp": (
-        "integrator = md\nnsteps = 50000\ndt = 0.002\n"
+        "integrator = md\nnsteps = {NSTEPS}\ndt = 0.002\n"
         "nstxout-compressed = 5000\ncontinuation = no\nconstraint_algorithm = lincs\n"
         "constraints = h-bonds\ncutoff-scheme = Verlet\ncoulombtype = PME\n"
         "rcoulomb = 1.0\nrvdw = 1.0\ntcoupl = V-rescale\ntc-grps = Protein_MOL Water_and_ions\n"
@@ -47,7 +48,7 @@ _DEFAULT_MDP: Dict[str, str] = {
         "gen_vel = yes\ngen_temp = {TEMPERATURE}\ngen_seed = -1\n"
     ),
     "npt.mdp": (
-        "integrator = md\nnsteps = 50000\ndt = 0.002\n"
+        "integrator = md\nnsteps = {NSTEPS}\ndt = 0.002\n"
         "nstxout-compressed = 5000\ncontinuation = yes\nconstraint_algorithm = lincs\n"
         "constraints = h-bonds\ncutoff-scheme = Verlet\ncoulombtype = PME\n"
         "rcoulomb = 1.0\nrvdw = 1.0\ntcoupl = V-rescale\ntc-grps = Protein_MOL Water_and_ions\n"
@@ -70,6 +71,76 @@ _DEFAULT_MDP: Dict[str, str] = {
 # dt=0.002 ps -> 500000 steps per ns (CONTRACT §9 engine note).
 _STEPS_PER_NS = 500000
 
+# Water keywords GROMACS recognizes without a per-ff watermodels.dat entry (3-/built-in models).
+# OPC, TIP4P-D, etc. live ONLY in a force field's watermodels.dat, so they must be confirmed there.
+_BUILTIN_WATER = {"tip3p", "spc", "spce", "tip4p", "tip4pew", "tip5p"}
+
+
+def _ff_top_dirs(gmx_path: Optional[str], extra: Optional[Path] = None) -> List[Path]:
+    """Directories GROMACS searches for ``<ff>.ff`` force-field folders, best-effort.
+
+    Mirrors gmx's own lookup order well enough for a preflight: the run cwd (a project-local
+    ``*.ff`` override), every entry of $GMXLIB, $GMXDATA/top, and ``<prefix>/share/gromacs/top``
+    derived from the gmx binary location. Only existing directories are returned. An empty
+    result means we could not locate the data dir and the caller should NOT downgrade the FF.
+    """
+    dirs: List[Path] = []
+    if extra is not None:
+        dirs.append(Path(extra))
+    for d in os.environ.get("GMXLIB", "").split(os.pathsep):
+        if d:
+            dirs.append(Path(d))
+    gmxdata = os.environ.get("GMXDATA")
+    if gmxdata:
+        dirs.append(Path(gmxdata) / "top")
+    if gmx_path:
+        try:
+            prefix = Path(gmx_path).resolve().parent.parent
+            dirs.append(prefix / "share" / "gromacs" / "top")
+        except (OSError, RuntimeError):
+            pass
+    seen: set = set()
+    out: List[Path] = []
+    for d in dirs:
+        key = str(d)
+        if key in seen:
+            continue
+        seen.add(key)
+        if d.is_dir():
+            out.append(d)
+    return out
+
+
+def _ff_water_available(top_dirs: List[Path], ff: str, water: str) -> bool:
+    """True if ``<ff>.ff`` exists in any top dir AND supports the ``water`` model.
+
+    A water model is supported when it is a GROMACS built-in (3-point/tip4p family) or it is
+    listed as a keyword in that force field's ``watermodels.dat``. ``none``/``select`` are always
+    accepted (caller-managed). Returns False if the ff directory is not found anywhere.
+    """
+    ff_dir_name = ff if ff.endswith(".ff") else ff + ".ff"
+    w = (water or "").strip().lower()
+    for d in top_dirs:
+        ffd = d / ff_dir_name
+        if not ffd.is_dir():
+            continue
+        # gmx pdb2gmx validates `-water` built-ins (tip3p/spc/tip4p/…) against a hardcoded enum,
+        # not watermodels.dat — that file only feeds the interactive `select` list for CUSTOM
+        # models (e.g. OPC). So a built-in is available whenever the ff dir exists; OPC and other
+        # non-built-ins must be listed in the ff's watermodels.dat (checked below).
+        if w in ("none", "select", "") or w in _BUILTIN_WATER:
+            return True
+        wm = ffd / "watermodels.dat"
+        if wm.exists():
+            tokens = {
+                ln.split()[0].lower()
+                for ln in wm.read_text(errors="replace").splitlines()
+                if ln.strip() and not ln.strip().startswith(";")
+            }
+            if w in tokens:
+                return True
+    return False
+
 
 class GromacsEngine(MDEngine):
     name = "gromacs"
@@ -78,10 +149,59 @@ class GromacsEngine(MDEngine):
         super().__init__(settings)
         self._gmx = shutil.which("gmx") or "gmx"
         self._acpype = shutil.which("acpype")
+        # Resolved once per run by _ff_water() (preflight + fallback), then reused so the receptor
+        # and peptide-ligand pdb2gmx calls — and the MM/GBSA AmberTools rebuild — all agree.
+        self._resolved_ff: Optional[str] = None
+        self._resolved_water: Optional[str] = None
 
     @property
     def is_real(self) -> bool:
         return True
+
+    # ------------------------------------------------------------------ force-field preflight
+    def _ff_water(self, ctx, *, cwd: Optional[Path] = None) -> Tuple[str, str]:
+        """Resolve the (protein_force_field, water_model) to actually use for this run.
+
+        Preflights the requested pair against the GROMACS top dirs. If the force field/water is
+        present, use it. If it is missing and FORCEFIELD_AUTOFALLBACK is on, fall back to the
+        stock amber14sb/tip3p pair with a logged warning (so a plain GROMACS install still runs).
+        If the top dirs can't be located at all, trust the request as-is (don't false-downgrade)
+        and let gmx pdb2gmx surface any real error. The choice is memoized and recorded in
+        ``cwd/forcefield.json`` for the MM/GBSA step to read.
+        """
+        if self._resolved_ff is not None and self._resolved_water is not None:
+            return self._resolved_ff, self._resolved_water
+        req_ff = self.settings.protein_force_field
+        req_w = self.settings.water_model
+        top_dirs = _ff_top_dirs(self._gmx if self._gmx != "gmx" else shutil.which("gmx"), extra=cwd)
+        if not top_dirs:
+            ctx.info("prepare_structure", f"GROMACS top dir not located for FF preflight; using "
+                     f"requested force field '{req_ff}' + water '{req_w}' as-is.")
+            ff, water = req_ff, req_w
+        elif _ff_water_available(top_dirs, req_ff, req_w):
+            ctx.info("prepare_structure", f"Force field '{req_ff}' + water '{req_w}' available.")
+            ff, water = req_ff, req_w
+        elif self.settings.forcefield_autofallback:
+            ff = self.settings.protein_force_field_fallback
+            water = self.settings.water_model_fallback
+            ctx.warning("prepare_structure",
+                        f"Force field '{req_ff}' + water '{req_w}' not found in GROMACS top dirs "
+                        f"{[str(d) for d in top_dirs]}; falling back to '{ff}' + '{water}'. Install "
+                        f"the {req_ff} GROMACS port (with OPC in its watermodels.dat) to enable it.")
+        else:
+            ctx.warning("prepare_structure",
+                        f"Force field '{req_ff}' + water '{req_w}' not found and "
+                        "FORCEFIELD_AUTOFALLBACK is off; attempting it anyway (gmx may fail).")
+            ff, water = req_ff, req_w
+        self._resolved_ff, self._resolved_water = ff, water
+        if cwd is not None:
+            try:
+                (Path(cwd) / "forcefield.json").write_text(json.dumps(
+                    {"protein_force_field": ff, "water_model": water,
+                     "requested_force_field": req_ff, "requested_water_model": req_w}))
+            except OSError:
+                pass
+        return ff, water
 
     # ------------------------------------------------------------------ subprocess
     def _run(self, ctx, step: str, args: List[str], *, cwd: Path, stdin_text: Optional[str] = None,
@@ -212,14 +332,18 @@ class GromacsEngine(MDEngine):
         src_lines = Path(receptor_file).read_text(errors="replace").replace("\r", "").splitlines()
         kept = [ln for ln in src_lines if ln.startswith(("ATOM", "TER", "END"))]
         clean_pdb.write_text("\n".join(kept) + "\n")
-        ctx.info(step, f"Prepared receptor PDB ({len(kept)} records). Running gmx pdb2gmx.")
+        # Resolve the protein force field + water model (ff19SB/OPC by default, with preflight
+        # fallback to amber14sb/tip3p). Done here, before the first pdb2gmx, so the whole run
+        # (receptor + peptide ligand + MM/GBSA) uses one consistent pair.
+        ff, water = self._ff_water(ctx, cwd=prep)
+        ctx.info(step, f"Prepared receptor PDB ({len(kept)} records). Running gmx pdb2gmx "
+                       f"(-ff {ff} -water {water}).")
 
-        # gmx pdb2gmx -ff amber14sb -water tip3p -ignh
         self._run(
             ctx, step,
             [self._gmx, "pdb2gmx", "-f", str(clean_pdb), "-o", "processed.gro",
              "-p", "topol.top", "-i", "posre.itp",
-             "-ff", self.settings.protein_force_field, "-water", self.settings.water_model, "-ignh"],
+             "-ff", ff, "-water", water, "-ignh"],
             cwd=prep,
         )
         return PreparedStructure(
@@ -236,13 +360,15 @@ class GromacsEngine(MDEngine):
         prep = ctx.prep_dir
 
         if ligand_type in ("peptide", "protein_partner"):
-            # Peptide/protein ligand -> pdb2gmx path (ff14sb / amber14sb).
-            ctx.info(step, "Peptide/protein ligand: parameterizing via pdb2gmx (amber14sb).")
+            # Peptide/protein ligand -> pdb2gmx path, using the SAME resolved protein FF/water as
+            # the receptor (preflight fallback applied) so the complex topology is self-consistent.
+            ff, water = self._ff_water(ctx, cwd=prep)
+            ctx.info(step, f"Peptide/protein ligand: parameterizing via pdb2gmx (-ff {ff}).")
             self._run(
                 ctx, step,
                 [self._gmx, "pdb2gmx", "-f", ligand_pdb, "-o", "ligand_processed.gro",
                  "-p", "ligand.top", "-i", "posre_LIG.itp",
-                 "-ff", self.settings.protein_force_field, "-water", self.settings.water_model, "-ignh"],
+                 "-ff", ff, "-water", water, "-ignh"],
                 cwd=prep,
             )
             # Convert the standalone ligand.top into an includable .itp and capture the real
@@ -375,9 +501,10 @@ class GromacsEngine(MDEngine):
         # editconf box -> solvate -> genion (CONTRACT §9 run_md sequence).
         self._render_mdp("ions.mdp", run / "ions.mdp")
         box_type = self.settings.extra.get("box_type", "dodecahedron")
+        box_pad = str(self.settings.box_padding_nm)
         self._run(ctx, "preparing",
                   [self._gmx, "editconf", "-f", "complex.gro", "-o", "boxed.gro",
-                   "-bt", box_type, "-d", "1.0", "-c"], cwd=run)
+                   "-bt", box_type, "-d", box_pad, "-c"], cwd=run)
         self._run(ctx, "preparing",
                   [self._gmx, "solvate", "-cp", "boxed.gro", "-cs", "spc216.gro",
                    "-o", "solv.gro", "-p", "topol.top"], cwd=run)
@@ -404,7 +531,7 @@ class GromacsEngine(MDEngine):
 
         # NVT
         ctx.set_status("running_nvt", current_step="running_nvt", progress=33.0)
-        self._render_mdp("nvt.mdp", run / "nvt.mdp")
+        self._render_mdp("nvt.mdp", run / "nvt.mdp", nsteps=int(self.settings.nvt_steps))
         self._run(ctx, "running_nvt",
                   [self._gmx, "grompp", "-f", "nvt.mdp", "-c", "em.gro", "-r", "em.gro",
                    "-p", "topol.top", "-n", "index.ndx", "-o", "nvt.tpr", "-maxwarn", "2"], cwd=run)
@@ -413,7 +540,7 @@ class GromacsEngine(MDEngine):
 
         # NPT
         ctx.set_status("running_npt", current_step="running_npt", progress=42.0)
-        self._render_mdp("npt.mdp", run / "npt.mdp")
+        self._render_mdp("npt.mdp", run / "npt.mdp", nsteps=int(self.settings.npt_steps))
         self._run(ctx, "running_npt",
                   [self._gmx, "grompp", "-f", "npt.mdp", "-c", "nvt.gro", "-r", "nvt.gro",
                    "-t", "nvt.cpt", "-p", "topol.top", "-n", "index.ndx",
