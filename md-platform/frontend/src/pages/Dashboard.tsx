@@ -34,6 +34,8 @@ export function Dashboard() {
   const [live, setLive] = useState(false);
   const [gpuBusy, setGpuBusy] = useState<number | null>(null);
   const [mdConc, setMdConc] = useState<number | null>(null);  // null = follow current md capacity
+  const [selected, setSelected] = useState<Set<string>>(new Set());  // finished jobs picked for delete
+  const [deleting, setDeleting] = useState(false);
 
   // Avoid overlapping polls / stale writes after unmount.
   const mounted = useRef(true);
@@ -44,16 +46,50 @@ export function Dashboard() {
       // here; the full cross-user view lives in the queue/Admin surfaces).
       const jobs = await jobApi.list(true);
       if (!mounted.current) return;
-      const completed = jobs
-        .filter((j) => j.status === "completed")
+      // Finished jobs (completed/failed/cancelled) so results can be cleaned up — including
+      // failed runs, not just completed ones.
+      const TERMINAL = new Set(["completed", "failed", "cancelled"]);
+      const finished = jobs
+        .filter((j) => TERMINAL.has(j.status))
         .sort((a, b) =>
-          (b.completed_at ?? "").localeCompare(a.completed_at ?? ""),
+          (b.completed_at ?? b.created_at ?? "").localeCompare(a.completed_at ?? a.created_at ?? ""),
         )
-        .slice(0, 8);
-      setRecent(completed);
+        .slice(0, 12);
+      setRecent(finished);
+      // Drop any selections that no longer exist (e.g. after a delete elsewhere).
+      const ids = new Set(finished.map((j) => j.id));
+      setSelected((prev) => new Set([...prev].filter((id) => ids.has(id))));
     } catch {
       /* recent list is best-effort */
     }
+  }, []);
+
+  const removeJobs = useCallback(async (ids: string[]) => {
+    if (ids.length === 0) return;
+    const msg = ids.length === 1
+      ? "Delete this job and all of its stored results?"
+      : `Delete ${ids.length} jobs and all of their stored results?`;
+    if (!window.confirm(msg)) return;
+    setDeleting(true);
+    try {
+      const results = await Promise.allSettled(ids.map((id) => jobApi.remove(id)));
+      const failed = results.filter((r) => r.status === "rejected").length;
+      if (failed && mounted.current) {
+        setError(`${failed} of ${ids.length} deletions failed.`);
+      }
+      setSelected(new Set());
+      await loadRecent();
+    } finally {
+      if (mounted.current) setDeleting(false);
+    }
+  }, [loadRecent]);
+
+  const toggleOne = useCallback((id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
   }, []);
 
   const pollOnce = useCallback(async () => {
@@ -240,7 +276,29 @@ export function Dashboard() {
     },
   ];
 
+  const allSelected = recent.length > 0 && recent.every((j) => selected.has(j.id));
   const recentColumns: Column<Job>[] = [
+    {
+      key: "select",
+      header: (
+        <input
+          type="checkbox"
+          aria-label="Select all finished jobs"
+          checked={allSelected}
+          onChange={(e) =>
+            setSelected(e.target.checked ? new Set(recent.map((j) => j.id)) : new Set())
+          }
+        />
+      ),
+      render: (j) => (
+        <input
+          type="checkbox"
+          aria-label={`Select ${j.name}`}
+          checked={selected.has(j.id)}
+          onChange={() => toggleOne(j.id)}
+        />
+      ),
+    },
     {
       key: "name",
       header: "Job",
@@ -249,6 +307,11 @@ export function Dashboard() {
           {j.name}
         </Link>
       ),
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (j) => <JobStatusBadge status={j.status} />,
     },
     {
       key: "poses",
@@ -273,9 +336,19 @@ export function Dashboard() {
       header: "",
       align: "right",
       render: (j) => (
-        <Link className="text-sm text-brand-700 hover:underline" to={`/jobs/${j.id}/results`}>
-          View results
-        </Link>
+        <div className="flex items-center justify-end gap-3">
+          <Link className="text-sm text-brand-700 hover:underline" to={`/jobs/${j.id}/results`}>
+            View results
+          </Link>
+          <button
+            type="button"
+            className="text-sm text-rose-600 hover:underline disabled:opacity-50"
+            disabled={deleting}
+            onClick={() => void removeJobs([j.id])}
+          >
+            Remove
+          </button>
+        </div>
       ),
     },
   ];
@@ -515,13 +588,27 @@ export function Dashboard() {
         />
       </Card>
 
-      {/* Recent completed */}
-      <Card title="Recently completed">
+      {/* Finished jobs (completed/failed) — selectable for result cleanup */}
+      <Card
+        title="Finished jobs"
+        actions={
+          selected.size > 0 ? (
+            <button
+              type="button"
+              className="rounded-md bg-rose-600 px-3 py-1 text-xs font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+              disabled={deleting}
+              onClick={() => void removeJobs([...selected])}
+            >
+              {deleting ? "Deleting…" : `Delete selected (${selected.size})`}
+            </button>
+          ) : undefined
+        }
+      >
         <DataTable
           columns={recentColumns}
           rows={recent}
           rowKey={(j) => j.id}
-          empty="No completed jobs yet."
+          empty="No finished jobs yet."
         />
       </Card>
     </div>
