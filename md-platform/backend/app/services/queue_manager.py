@@ -54,14 +54,20 @@ class QueueManager:
                 self._backend = "local"
 
         if self._backend == "local":
-            # One worker per MD-pool slot (GPUs in the MD pool × parallel-MD concurrency), plus
-            # headroom for design-job orchestrators which run on the design pool.
+            # The MD executor gets EXACTLY one worker per MD-pool slot (GPUs in the MD pool ×
+            # parallel-MD concurrency). It must NOT exceed the MD GPU-slot count: an extra worker
+            # would start an MD subjob that can't get a GPU lock and would then run lock-free
+            # (CPU / unlocked GPU) per the runner's fallback, over-subscribing the GPU. Design
+            # orchestrators run on a SEPARATE executor (below) so they never consume MD worker
+            # slots (which would both starve MD and inflate effective MD concurrency).
             pools = self._settings.resolved_gpu_pools()
             md_gpus = sum(1 for p in pools.values() if p == "md") or 1
             design_gpus = sum(1 for p in pools.values() if p == "design")
             md_slots = md_gpus * self._settings.resolved_md_concurrency()
-            workers = max(1, md_slots + max(1, design_gpus))
-            self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="md-local")
+            self._executor = ThreadPoolExecutor(max_workers=max(1, md_slots), thread_name_prefix="md-local")
+            # Dedicated design pool: one worker per design GPU (>=1). enqueue_design() targets this.
+            self._design_executor = ThreadPoolExecutor(
+                max_workers=max(1, design_gpus), thread_name_prefix="design")
 
     @property
     def backend(self) -> str:
@@ -84,14 +90,12 @@ class QueueManager:
         self._executor.submit(self._run_local, subjob_id)
 
     def enqueue_design(self, design_id: str) -> None:
-        """Run a peptide-design job. Always executes in-process (the orchestrator runs the GA
-        loop, fans docking out to threads, and drives MD on the design-pool GPU); RQ mode gets a
-        lazily-created single-thread executor so design never blocks the MD queue."""
-        if self._executor is not None:
-            self._executor.submit(self._run_design_local, design_id)
-            return
-        # Lazily create the single-worker design executor under the lock (double-checked) so
-        # concurrent requests can't each build one and break the single-worker serialization.
+        """Run a peptide-design job in-process on the DESIGN executor (never the MD executor), so
+        design orchestrators never consume MD worker slots. In local mode the design executor is
+        created in _init_backend (one worker per design GPU); in RQ mode it is lazily created as a
+        single-worker pool so design never blocks the MD queue."""
+        # Lazily create the design executor under the lock (double-checked) if it doesn't exist
+        # yet (RQ mode) so concurrent requests can't each build one and break serialization.
         if self._design_executor is None:
             with self._lock:
                 if self._design_executor is None:
