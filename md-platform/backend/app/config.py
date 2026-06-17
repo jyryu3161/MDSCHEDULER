@@ -75,9 +75,12 @@ class Settings(BaseSettings):
 
     MD_ENGINE: str = "auto"  # gromacs | mock | auto
     DOCK_ENGINE: str = "vina"  # peptide-design docking: vina (default, AutoDock Vina 1.2.7, rigid) | smina (flexible side chains) | auto
-    # Default to ff19SB + OPC (recommended for binding studies); the worker pre-flights the
-    # GROMACS install and falls back to the *_FALLBACK pair when the ff19SB port is absent.
-    PROTEIN_FORCE_FIELD: str = "ff19SB"
+    # Default to ff19SB + OPC (recommended for binding studies). The value MUST be the GROMACS
+    # force-field PORT DIRECTORY name (`gmx pdb2gmx -ff`); the ff19SB port ships as "amber19sb.ff",
+    # so the default is "amber19sb" (the literal "ff19SB" would not match and would silently fall
+    # back). The worker pre-flights the GROMACS install and falls back to the *_FALLBACK pair when
+    # the port is absent.
+    PROTEIN_FORCE_FIELD: str = "amber19sb"
     LIGAND_FORCE_FIELD: str = "gaff2"
     LIGAND_CHARGE_METHOD: str = "am1bcc"
     WATER_MODEL: str = "opc"

@@ -265,10 +265,12 @@ def run(ctx, settings, *, md: Dict[str, Any]) -> Dict[str, Any]:
 
     n_frames = int(md.get("n_frames") or 0)
     n_xtc = _xtc_frame_count(xtc)
-    # Frame window (1-based into md.xtc). Honor an explicit job override; otherwise restrict
-    # the binding-ΔG window to the bound segment detected by analyze_md — frames after the
-    # ligand dissociates would corrupt MM/PBSA. Subsample to ~50 frames to keep PB tractable.
-    startframe = int(ctx.job_meta.get("mmpbsa_startframe", 1))
+    # Frame window (1-based into md.xtc). Honor explicit job overrides; otherwise restrict the
+    # binding-ΔG window to the bound segment detected by analyze_md (frames after the ligand
+    # dissociates would corrupt MM/PBSA), AND discard an initial equilibration fraction of the
+    # production window so the un-relaxed first frames don't bias the average. Subsample to ~50
+    # frames to keep PB tractable.
+    explicit_start = ctx.job_meta.get("mmpbsa_startframe")
     explicit_end = ctx.job_meta.get("mmpbsa_endframe")
     bound_end_ns: Optional[float] = None
     window_basis = "explicit job override"
@@ -277,12 +279,23 @@ def run(ctx, settings, *, md: Dict[str, Any]) -> Dict[str, Any]:
     else:
         endframe, bound_end_ns = _bound_endframe(ctx, settings, md, n_xtc)
         if endframe is None:
-            endframe = max(startframe, n_xtc or n_frames or 1)
+            endframe = max(1, n_xtc or n_frames or 1)
             window_basis = "full trajectory (no bound window detected)"
         else:
             window_basis = "auto-detected bound window (ligand RMSD)"
     if n_xtc:
         endframe = min(endframe, n_xtc)
+    # Start frame: explicit override, else discard the first `mmpbsa_equil_discard_frac` (default
+    # 10%) of [1, endframe] as additional production equilibration before averaging.
+    if explicit_start is not None:
+        startframe = int(explicit_start)
+    else:
+        discard = float(ctx.job_meta.get("mmpbsa_equil_discard_frac", 0.1))
+        discard = min(max(discard, 0.0), 0.5)  # never drop more than half the window
+        startframe = max(1, int(discard * endframe) + 1)
+        if discard > 0:
+            window_basis += f", first {discard * 100:.0f}% discarded (equilibration)"
+    startframe = max(1, startframe)
     endframe = max(startframe, endframe)
     interval = max(1, (endframe - startframe + 1) // 50)
     salt = float(ctx.job_meta.get("salt_concentration", 0.15))

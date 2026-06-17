@@ -40,28 +40,38 @@ _DEFAULT_MDP: Dict[str, str] = {
         "rcoulomb = 1.0\nrvdw = 1.0\npbc = xyz\n"
     ),
     "nvt.mdp": (
+        # Position restraints on solute (protein -DPOSRES, ligand -DPOSRES_LIG) keep the docked
+        # pose fixed while the solvent equilibrates; DispCorr=EnerPres matches AMBER FF conventions.
+        # Kept at parity with md-env/templates/gromacs/nvt.mdp so this fallback is not degraded.
+        "define = -DPOSRES -DPOSRES_LIG\n"
         "integrator = md\nnsteps = {NSTEPS}\ndt = 0.002\n"
         "nstxout-compressed = 5000\ncontinuation = no\nconstraint_algorithm = lincs\n"
         "constraints = h-bonds\ncutoff-scheme = Verlet\ncoulombtype = PME\n"
-        "rcoulomb = 1.0\nrvdw = 1.0\ntcoupl = V-rescale\ntc-grps = Protein_MOL Water_and_ions\n"
+        "rcoulomb = 1.0\nrvdw = 1.0\nDispCorr = EnerPres\n"
+        "tcoupl = V-rescale\ntc-grps = Protein_MOL Water_and_ions\n"
         "tau_t = 0.1 0.1\nref_t = {TEMPERATURE} {TEMPERATURE}\npcoupl = no\npbc = xyz\n"
         "gen_vel = yes\ngen_temp = {TEMPERATURE}\ngen_seed = -1\n"
     ),
     "npt.mdp": (
+        # Solute stays restrained during NPT so the box/density relaxes around the fixed pose.
+        "define = -DPOSRES -DPOSRES_LIG\n"
         "integrator = md\nnsteps = {NSTEPS}\ndt = 0.002\n"
         "nstxout-compressed = 5000\ncontinuation = yes\nconstraint_algorithm = lincs\n"
         "constraints = h-bonds\ncutoff-scheme = Verlet\ncoulombtype = PME\n"
-        "rcoulomb = 1.0\nrvdw = 1.0\ntcoupl = V-rescale\ntc-grps = Protein_MOL Water_and_ions\n"
+        "rcoulomb = 1.0\nrvdw = 1.0\nDispCorr = EnerPres\n"
+        "tcoupl = V-rescale\ntc-grps = Protein_MOL Water_and_ions\n"
         "tau_t = 0.1 0.1\nref_t = {TEMPERATURE} {TEMPERATURE}\n"
         "pcoupl = C-rescale\npcoupltype = isotropic\ntau_p = 2.0\nref_p = {PRESSURE}\n"
         "compressibility = 4.5e-5\npbc = xyz\ngen_vel = no\n"
     ),
     "md.mdp": (
+        # Production: no position restraints (free dynamics); DispCorr=EnerPres retained.
         "integrator = md\nnsteps = {NSTEPS}\ndt = {DT}\n"
         "nstxout-compressed = {XTC_INTERVAL}\nnstenergy = {XTC_INTERVAL}\n"
         "nstlog = {XTC_INTERVAL}\ncontinuation = yes\nconstraint_algorithm = lincs\n"
         "constraints = h-bonds\ncutoff-scheme = Verlet\ncoulombtype = PME\n"
-        "rcoulomb = 1.0\nrvdw = 1.0\ntcoupl = V-rescale\ntc-grps = Protein_MOL Water_and_ions\n"
+        "rcoulomb = 1.0\nrvdw = 1.0\nDispCorr = EnerPres\n"
+        "tcoupl = V-rescale\ntc-grps = Protein_MOL Water_and_ions\n"
         "tau_t = 0.1 0.1\nref_t = {TEMPERATURE} {TEMPERATURE}\n"
         "pcoupl = C-rescale\npcoupltype = isotropic\ntau_p = 2.0\nref_p = {PRESSURE}\n"
         "compressibility = 4.5e-5\npbc = xyz\ngen_vel = no\n"
@@ -361,6 +371,11 @@ class GromacsEngine(MDEngine):
         # fallback to amber14sb/tip3p). Done here, before the first pdb2gmx, so the whole run
         # (receptor + peptide ligand + MM/GBSA) uses one consistent pair.
         ff, water = self._ff_water(ctx, cwd=prep)
+        if not Path(self.settings.mdp_template_dir).is_dir():
+            ctx.warning(step, f"MDP template dir '{self.settings.mdp_template_dir}' not found; "
+                              "using built-in default .mdp parameters. These are now at parity with "
+                              "the maintained templates (position restraints + DispCorr), but set "
+                              "MDP_TEMPLATE_DIR to md-env/templates/gromacs to use the tracked files.")
         ctx.info(step, f"Prepared receptor PDB ({len(kept)} records). Running gmx pdb2gmx "
                        f"(-ff {ff} -water {water}).")
 

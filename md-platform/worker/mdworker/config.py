@@ -60,12 +60,14 @@ class Settings:
 
     # Force-field / MD chemistry settings.
     # Default to the modern protein FF + 4-point water recommended for binding studies
-    # (ff19SB is parameterized against OPC). These require the ff19SB GROMACS port to be
-    # installed; when it is absent the engine PRE-FLIGHTS the GROMACS top dirs and falls back
-    # to the stock amber14sb + tip3p pair (see *_fallback below) with a logged warning, so the
-    # platform still runs on a plain GROMACS install. Override via PROTEIN_FORCE_FIELD /
-    # WATER_MODEL.
-    protein_force_field: str = "ff19SB"
+    # (ff19SB is parameterized against OPC). The value MUST be the GROMACS force-field PORT
+    # DIRECTORY name as `gmx pdb2gmx -ff` expects it — the ff19SB port ships as "amber19sb.ff",
+    # so the default is "amber19sb" (NOT the literal "ff19SB", which would not match the dir and
+    # would silently trigger the fallback). When the port is absent the engine PRE-FLIGHTS the
+    # GROMACS top dirs and falls back to the stock amber14sb + tip3p pair (see *_fallback below)
+    # with a logged warning, so the platform still runs on a plain GROMACS install. Override via
+    # PROTEIN_FORCE_FIELD / WATER_MODEL.
+    protein_force_field: str = "amber19sb"
     ligand_force_field: str = "gaff2"
     ligand_charge_method: str = "am1bcc"
     water_model: str = "opc"
@@ -134,7 +136,7 @@ def load_settings() -> Settings:
         md_engine=_env("MD_ENGINE", "auto"),
         backend_url=_env("BACKEND_URL", "http://backend:8000").rstrip("/"),
         internal_api_token=_env("INTERNAL_API_TOKEN", "internal-worker-token-change-me"),
-        protein_force_field=_env("PROTEIN_FORCE_FIELD", "ff19SB"),
+        protein_force_field=_env("PROTEIN_FORCE_FIELD", "amber19sb"),
         ligand_force_field=_env("LIGAND_FORCE_FIELD", "gaff2"),
         ligand_charge_method=_env("LIGAND_CHARGE_METHOD", "am1bcc"),
         water_model=_env("WATER_MODEL", "opc"),

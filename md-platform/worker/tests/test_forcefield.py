@@ -163,7 +163,7 @@ def test_config_defaults_to_ff19sb_opc_with_fallback(monkeypatch):
         monkeypatch.delenv(var, raising=False)
     from mdworker.config import load_settings
     s = load_settings()
-    assert s.protein_force_field == "ff19SB"
+    assert s.protein_force_field == "amber19sb"  # GROMACS port dir name (ff19SB ships as amber19sb.ff)
     assert s.water_model == "opc"
     assert s.protein_force_field_fallback == "amber14sb"
     assert s.water_model_fallback == "tip3p"

@@ -719,9 +719,9 @@ export function Upload() {
             </summary>
             <div className="border-t border-slate-200 p-4">
               <div className="grid gap-5 lg:grid-cols-2">
-                <Readonly label="Protein force field" value="AMBER ff14SB (fixed)" />
+                <Readonly label="Protein force field" value="AMBER ff19SB (fixed)" />
                 <Readonly label="Ligand force field" value="GAFF2 / AM1-BCC (fixed)" />
-                <Readonly label="Water model" value="TIP3P (fixed)" />
+                <Readonly label="Water model" value="OPC (4-point, fixed)" />
                 <div>
                   <label className="label" htmlFor="box-type">
                     Box type
@@ -772,6 +772,13 @@ export function Upload() {
                   Use GPU
                 </label>
               </div>
+
+              <p className="mt-3 text-xs text-slate-500">
+                ff19SB + OPC is the platform default. If the ff19SB GROMACS port is
+                unavailable on the compute node, the run falls back to AMBER ff14SB +
+                TIP3P; the force field actually used is recorded per job and shown on
+                the job detail page.
+              </p>
 
               {isCif && (
                 <div className="mt-5 border-t border-slate-200 pt-4">
