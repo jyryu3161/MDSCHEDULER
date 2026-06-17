@@ -52,7 +52,8 @@ class UserMe(BaseModel):
 
 class PoseEntry(BaseModel):
     index: int
-    docking_score: float
+    # Optional: a non-docked input (AlphaFold-predicted complex) has no docking score.
+    docking_score: float | None = None
 
 
 class AtomMapping(BaseModel):

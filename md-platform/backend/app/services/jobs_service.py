@@ -69,13 +69,16 @@ def subjob_id(job_id: str, pose_index: int, replica_index: int = 1) -> str:
     return f"{job_id}_pose_{pose_index:02d}"
 
 
-def select_top_poses(report: ValidationReport, top_n: int) -> list[tuple[int, float]]:
+def select_top_poses(report: ValidationReport, top_n: int) -> list[tuple[int, float | None]]:
     """Sort poses by docking score ascending (more negative = better) and take top-n.
 
-    Returns list of (pose_index, docking_score) preserving original 1-based indices.
+    Returns list of (pose_index, docking_score) preserving original 1-based indices. The docking
+    score is OPTIONAL: a non-docked input (e.g. an AlphaFold-predicted complex) has no score, so
+    None-scored poses sort last (by index) instead of breaking the comparison.
     """
     poses = [(p.index, p.docking_score) for p in report.poses]
-    poses.sort(key=lambda t: (t[1], t[0]))
+    # None compares as "worst" (sorts after any real score); ties/all-None fall back to index order.
+    poses.sort(key=lambda t: (t[1] is None, t[1] if t[1] is not None else 0.0, t[0]))
     return poses[: max(1, top_n)]
 
 
@@ -155,7 +158,9 @@ def create_job_and_subjobs(
                     job_id=job_id,
                     pose_index=pose_index,
                     replica_index=replica,
-                    docking_score=float(score),
+                    # docking_score is optional (AlphaFold/no-dock inputs have none); store 0.0 as
+                    # the neutral sentinel so the non-null column is satisfied without breaking.
+                    docking_score=float(score) if score is not None else 0.0,
                     status=JobStatus.QUEUED,
                     progress=0.0,
                     completed_ns=0.0,
