@@ -26,6 +26,7 @@ def _design_config(dj: DesignJob) -> dict:
         "num_generations": dj.num_generations,
         "top_k_md": dj.top_k_md,
         "md_length_ns": dj.md_length_ns,
+        "n_replicas": dj.n_replicas,
         "exhaustiveness": dj.exhaustiveness,
         "eval_mode": dj.eval_mode,
     }
@@ -43,6 +44,12 @@ def _runner_settings(dj: DesignJob) -> dict:
         "LIGAND_FORCE_FIELD": s.LIGAND_FORCE_FIELD,
         "LIGAND_CHARGE_METHOD": s.LIGAND_CHARGE_METHOD,
         "WATER_MODEL": s.WATER_MODEL,
+        "PROTEIN_FORCE_FIELD_FALLBACK": s.PROTEIN_FORCE_FIELD_FALLBACK,
+        "WATER_MODEL_FALLBACK": s.WATER_MODEL_FALLBACK,
+        "FORCEFIELD_AUTOFALLBACK": s.FORCEFIELD_AUTOFALLBACK,
+        "BOX_PADDING_NM": s.BOX_PADDING_NM,
+        "NVT_STEPS": s.NVT_STEPS,
+        "NPT_STEPS": s.NPT_STEPS,
     }
 
 

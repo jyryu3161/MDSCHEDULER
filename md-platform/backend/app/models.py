@@ -302,6 +302,8 @@ class DesignJob(Base):
     num_generations: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
     top_k_md: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
     md_length_ns: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
+    # Independent MD replicas per evaluated candidate; GA fitness uses the replica-mean ΔG.
+    n_replicas: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     exhaustiveness: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
     # Per-generation evaluation policy: "hybrid" (dock all -> MD top-k) | "md_only" (MD all).
     eval_mode: Mapped[str] = mapped_column(String(16), default="hybrid", nullable=False)

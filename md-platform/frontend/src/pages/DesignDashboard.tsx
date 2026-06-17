@@ -131,6 +131,7 @@ function CreateDesignForm({ onCreated }: { onCreated: () => void }) {
   const [generations, setGenerations] = useState(5);
   const [topK, setTopK] = useState(2);
   const [mdNs, setMdNs] = useState(10);
+  const [mdReplicas, setMdReplicas] = useState(1);
   const [exhaustiveness, setExhaustiveness] = useState(8);
   const [evalMode, setEvalMode] = useState<DesignEvalMode>("hybrid");
   const [dockEngine, setDockEngine] = useState<DesignDockEngine>("vina");
@@ -166,7 +167,7 @@ function CreateDesignForm({ onCreated }: { onCreated: () => void }) {
       const job = await designApi.create({
         name, initial_sequences: sequences, population_size: population,
         num_generations: generations, top_k_md: topK, md_length_ns: mdNs,
-        exhaustiveness, eval_mode: evalMode, dock_engine: dockEngine,
+        n_replicas: mdReplicas, exhaustiveness, eval_mode: evalMode, dock_engine: dockEngine,
         compound_name: compoundName, smiles: smiles.trim() || undefined, compound,
       });
       onCreated();
@@ -219,13 +220,18 @@ function CreateDesignForm({ onCreated }: { onCreated: () => void }) {
           </div>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-5">
+        <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
           <NumField label="Population" value={population} setValue={setPopulation} min={2} max={200} />
           <NumField label="Generations" value={generations} setValue={setGenerations} min={1} max={100} />
           <NumField label="Top-k MD" value={topK} setValue={setTopK} min={1} max={50} />
           <NumField label="MD length (ns)" value={mdNs} setValue={setMdNs} min={1} max={1000} />
+          <NumField label="Replicas/cand." value={mdReplicas} setValue={setMdReplicas} min={1} max={5} />
           <NumField label="Exhaustiveness" value={exhaustiveness} setValue={setExhaustiveness} min={1} max={64} />
         </div>
+        <p className="-mt-2 text-xs text-slate-500">
+          Replicas/cand.: independent MD repeats per candidate; fitness uses the mean ΔG
+          (multiplies MD cost by this factor).
+        </p>
 
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
@@ -268,8 +274,10 @@ function NumField({ label, value, setValue, min, max }: {
   return (
     <div>
       <label className="block text-xs font-medium text-slate-600">{label}</label>
-      <input type="number" min={min} max={max} value={value}
-             onChange={(e) => setValue(Number(e.target.value))}
+      <input type="number" min={min} max={max} step={1} value={value}
+             onChange={(e) =>
+               setValue(Math.max(min, Math.min(max, Math.floor(Number(e.target.value)) || min)))
+             }
              className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm" />
     </div>
   );

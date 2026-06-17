@@ -53,6 +53,7 @@ def run_design(design_id: str, config: Dict[str, Any], reporter, settings: Dict[
     num_generations = int(config.get("num_generations", 5))
     top_k_md = int(config.get("top_k_md", 2))
     md_length_ns = float(config.get("md_length_ns", 10.0))
+    n_replicas = max(1, min(5, int(config.get("n_replicas", 1) or 1)))
     exhaustiveness = int(config.get("exhaustiveness", 16))
     eval_mode = str(config.get("eval_mode", "hybrid"))  # "hybrid" (dock->top-k MD) | "md_only"
     md_engine = str(settings.get("MD_ENGINE", "mock")).lower()
@@ -106,13 +107,15 @@ def run_design(design_id: str, config: Dict[str, Any], reporter, settings: Dict[
                 out[s] = None
                 continue
             try:
-                out[s] = md_eval.evaluate(
-                    s, res.score, engine=md_engine,
+                agg = md_eval.evaluate_replicas(
+                    s, res.score, n_replicas=n_replicas, engine=md_engine,
                     workdir=workdir / "md" / s, peptide_pdb=res.peptide_pdb,
                     pose_pdbqt=res.pose_pdbqt, gpu_id=gpu_id, md_length_ns=md_length_ns,
                     settings={**settings, "compound_file": config["compound_file"]},
                     log=lambda m: log(m),
                 )
+                # GA fitness uses the replica-mean ΔG (more negative = stronger).
+                out[s] = agg["dg"]
             except Exception as exc:  # noqa: BLE001
                 log(f"MD evaluation failed for {s}: {exc}", level="warning")
                 out[s] = None

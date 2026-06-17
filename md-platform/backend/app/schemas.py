@@ -371,6 +371,9 @@ class DesignJobCreate(BaseModel):
     num_generations: int = Field(default=5, ge=1, le=100)
     top_k_md: int = Field(default=2, ge=1, le=50)
     md_length_ns: int = Field(default=10, ge=1, le=1000)
+    # Independent MD replicas per evaluated candidate; fitness uses the mean ΔG (capped low
+    # because GA cost already scales with population × generations × top_k_md).
+    n_replicas: int = Field(default=1, ge=1, le=5)
     exhaustiveness: int = Field(default=8, ge=1, le=64)
     # Per-generation evaluation policy: "hybrid" (dock all -> MD top-k, efficient, default) or
     # "md_only" (MD every candidate, most accurate, most costly).
@@ -422,6 +425,7 @@ class DesignJobOut(BaseModel):
     num_generations: int
     top_k_md: int
     md_length_ns: int
+    n_replicas: int = 1
     eval_mode: str = "hybrid"
     dock_engine: str = "vina"
     current_generation: int

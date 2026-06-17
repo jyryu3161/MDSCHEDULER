@@ -61,6 +61,7 @@ async def create_design(
     num_generations: int = Form(5),
     top_k_md: int = Form(2),
     md_length_ns: int = Form(10),
+    n_replicas: int = Form(1),
     exhaustiveness: int = Form(8),
     eval_mode: str = Form("hybrid"),
     dock_engine: str = Form("vina"),
@@ -75,8 +76,8 @@ async def create_design(
         cfg = DesignJobCreate(
             name=name, initial_sequences=seqs, population_size=population_size,
             num_generations=num_generations, top_k_md=top_k_md, md_length_ns=md_length_ns,
-            exhaustiveness=exhaustiveness, eval_mode=eval_mode, dock_engine=dock_engine,
-            smiles=smiles, compound_name=compound_name,
+            n_replicas=n_replicas, exhaustiveness=exhaustiveness, eval_mode=eval_mode,
+            dock_engine=dock_engine, smiles=smiles, compound_name=compound_name,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
@@ -125,8 +126,8 @@ async def create_design(
             initial_sequences=json.dumps(cfg.initial_sequences),
             peptide_length=len(cfg.initial_sequences[0]),
             population_size=cfg.population_size, num_generations=cfg.num_generations,
-            top_k_md=cfg.top_k_md, md_length_ns=cfg.md_length_ns, exhaustiveness=cfg.exhaustiveness,
-            eval_mode=cfg.eval_mode, dock_engine=cfg.dock_engine,
+            top_k_md=cfg.top_k_md, md_length_ns=cfg.md_length_ns, n_replicas=cfg.n_replicas,
+            exhaustiveness=cfg.exhaustiveness, eval_mode=cfg.eval_mode, dock_engine=cfg.dock_engine,
             created_at=utcnow(),
         )
         db.add(dj)

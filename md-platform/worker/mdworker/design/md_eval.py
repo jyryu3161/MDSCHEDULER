@@ -78,6 +78,44 @@ def evaluate(
         return synthetic_dg(docking_score)
 
 
+def evaluate_replicas(
+    sequence: str,
+    docking_score: float,
+    *,
+    n_replicas: int = 1,
+    engine: str = "mock",
+    workdir: Optional[Path] = None,
+    log: Optional[Callable[[str], None]] = None,
+    **kw,
+) -> dict:
+    """Run ``n_replicas`` MD evaluations and aggregate to mean ± SEM.
+
+    Each replica gets its own ``workdir/rep_RR`` so trajectories never collide. Real-MD replicas
+    are independent because the NVT step generates velocities with ``gen_seed = -1`` (GROMACS
+    draws a fresh random seed each run); the mock ΔG is deterministic, so its replicas are
+    identical (SEM 0), which is correct for the mock path. Returns
+    {"dg": mean, "sem": ..., "std": ..., "n": k, "values": [...]}; the GA uses ``dg`` as fitness.
+    """
+    n = max(1, int(n_replicas or 1))
+    values: list[float] = []
+    for r in range(1, n + 1):
+        wd = (Path(workdir) / f"rep_{r:02d}") if workdir else None
+        values.append(float(evaluate(sequence, docking_score, engine=engine, workdir=wd,
+                                     log=log, **kw)))
+    mean = sum(values) / len(values)
+    if len(values) > 1:
+        var = sum((v - mean) ** 2 for v in values) / (len(values) - 1)
+        std = var ** 0.5
+        sem = std / (len(values) ** 0.5)
+    else:
+        std = sem = 0.0
+    if log and n > 1:
+        log(f"{sequence}: ΔG {mean:.2f} ± {sem:.2f} kcal/mol over {n} replicas "
+            f"(values {[round(v, 2) for v in values]}).")
+    return {"dg": round(mean, 3), "sem": round(sem, 3), "std": round(std, 3),
+            "n": len(values), "values": [round(v, 3) for v in values]}
+
+
 def _gromacs_dg(sequence, *, workdir, peptide_pdb, pose_pdbqt, gpu_id, md_length_ns, settings, log) -> float:
     """Real short MD + MM/GBSA on the docked complex via the proven design MD adapter.
 

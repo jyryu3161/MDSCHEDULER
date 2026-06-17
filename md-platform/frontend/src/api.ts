@@ -271,6 +271,7 @@ export const designApi = {
     form.append("num_generations", String(payload.num_generations));
     form.append("top_k_md", String(payload.top_k_md));
     form.append("md_length_ns", String(payload.md_length_ns));
+    form.append("n_replicas", String(payload.n_replicas));
     form.append("exhaustiveness", String(payload.exhaustiveness));
     form.append("eval_mode", payload.eval_mode);
     form.append("dock_engine", payload.dock_engine);

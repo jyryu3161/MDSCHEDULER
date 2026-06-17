@@ -475,6 +475,7 @@ export interface DesignJob {
   num_generations: number;
   top_k_md: number;
   md_length_ns: number;
+  n_replicas: number;
   eval_mode: DesignEvalMode;
   dock_engine: DesignDockEngine;
   current_generation: number;
@@ -520,6 +521,7 @@ export interface DesignJobCreate {
   num_generations: number;
   top_k_md: number;
   md_length_ns: number;
+  n_replicas: number;            // MD replicas per evaluated candidate (fitness = mean ΔG)
   exhaustiveness: number;
   eval_mode: DesignEvalMode;     // hybrid (dock→top-k MD) | md_only (MD all)
   dock_engine: DesignDockEngine; // vina | smina | gnina | auto

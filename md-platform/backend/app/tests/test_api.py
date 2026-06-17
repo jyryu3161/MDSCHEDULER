@@ -300,6 +300,10 @@ def test_create_job_fans_out_replicas(client, admin_token):
             "top_n_poses": 2,
             "n_replicas": 2,
             "md_preset": "standard",
+            # This test validates subjob fan-out (created at job-create time), not GPU
+            # scheduling; run without GPU so its background mock subjobs don't claim GPU slots
+            # and race the shared-DB gpu_pools tests.
+            "use_gpu": False,
         },
     )
     assert resp.status_code == 201, resp.text
