@@ -257,6 +257,16 @@ install still runs. Set `FORCEFIELD_AUTOFALLBACK=false` for strict mode (let
 MM/GBSA step automatically uses the matching AmberTools leaprc
 (`leaprc.protein.ff19SB` vs `oldff/leaprc.ff14SB`) for whichever FF actually ran.
 
+> **Port naming.** Many GROMACS builds ship the ff19SB port as **`amber19sb.ff`**
+> (e.g. GROMACS 2026 bundles `amber19sb.ff` with `opc` in its `watermodels.dat`),
+> not `ff19SB.ff`. On those, set `PROTEIN_FORCE_FIELD=amber19sb WATER_MODEL=opc`
+> so the preflight uses it directly (the default `ff19SB` would not match and would
+> fall back). 4-/5-point water (OPC, TIP4P, TIP5P) is handled automatically: the
+> engine solvates from the matching box (`tip4p.gro`/`tip5p.gro`) and runs the
+> integrator update on the CPU (`gmx mdrun -update gpu` rejects virtual sites),
+> keeping nonbonded on the GPU. Verified end-to-end on GROMACS 2026.2 (CUDA) with
+> amber19sb + OPC.
+
 > **Interpreting the binding score.** The single-trajectory, entropy-free
 > MM/GBSA value is a **relative ranking score, not an absolute ΔG/Kd**. Each run
 > also reports **pose occupancy** (fraction of the trajectory the ligand stayed
