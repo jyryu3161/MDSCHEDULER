@@ -29,6 +29,7 @@ def _design_config(dj: DesignJob) -> dict:
         "n_replicas": dj.n_replicas,
         "exhaustiveness": dj.exhaustiveness,
         "eval_mode": dj.eval_mode,
+        "strategy": dj.strategy,
     }
 
 
@@ -84,8 +85,12 @@ def run_design_job(design_id: str) -> None:
     finally:
         db.close()
 
+    strategy = str(config.get("strategy", "ga")).lower()
     try:
-        from mdworker.design.runner import run_design  # deferred: worker may be absent
+        if strategy == "autoscientist":
+            from mdworker.design.autoscientist import run_autoscientist as _run  # deferred
+        else:
+            from mdworker.design.runner import run_design as _run  # deferred: worker may be absent
     except Exception as exc:  # noqa: BLE001
         reporter.log(design_id, "error", "design",
                      f"Design worker unavailable: {exc.__class__.__name__}: {exc}")
@@ -94,7 +99,7 @@ def run_design_job(design_id: str) -> None:
         return
 
     try:
-        run_design(design_id, config, reporter, settings)
+        _run(design_id, config, reporter, settings)
     except Exception as exc:  # noqa: BLE001 — runner sets terminal status; this is a backstop
         reporter.set_status(design_id, JobStatus.FAILED, error_message=str(exc))
         reporter.log(design_id, "error", "design", f"Design execution error: {exc}")

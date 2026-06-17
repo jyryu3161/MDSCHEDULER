@@ -383,6 +383,10 @@ class DesignJobCreate(BaseModel):
     eval_mode: Literal["hybrid", "md_only"] = "hybrid"
     # Docking engine for this run (selectable at GA launch): vina (default) | smina | gnina | auto.
     dock_engine: Literal["vina", "smina", "gnina", "auto"] = "vina"
+    # Design strategy: "ga" (genetic algorithm) or "autoscientist" (LLM self-organizing agent team).
+    # For autoscientist the knobs reinterpret as: num_generations=rounds, population_size=candidates
+    # per round, dock_oversample=number of research directions.
+    strategy: Literal["ga", "autoscientist"] = "ga"
     # SMILES is written to disk as compound.smi; cap it so it can't bypass the upload size limit.
     smiles: str | None = Field(default=None, max_length=10000)
     compound_name: str = Field(default="compound", max_length=255)  # matches DB String(255)
@@ -431,6 +435,7 @@ class DesignJobOut(BaseModel):
     n_replicas: int = 1
     eval_mode: str = "hybrid"
     dock_engine: str = "vina"
+    strategy: str = "ga"
     current_generation: int
     progress: float
     assigned_gpu: int | None = None

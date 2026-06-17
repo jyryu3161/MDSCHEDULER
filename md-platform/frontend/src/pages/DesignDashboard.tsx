@@ -12,12 +12,14 @@ import {
   Spinner,
   type Column,
 } from "../components";
-import type { DesignDockEngine, DesignEvalMode, DesignJob, GpuStatus } from "../types";
+import type { DesignDockEngine, DesignEvalMode, DesignJob, DesignStrategy, GpuStatus } from "../types";
 
 const POLL_MS = 4000;
 
-export function DesignDashboard() {
+export function DesignDashboard({ strategy = "ga" }: { strategy?: DesignStrategy } = {}) {
   const navigate = useNavigate();
+  const isAS = strategy === "autoscientist";
+  const base = isAS ? "/autoscientist" : "/design";
   const [jobs, setJobs] = useState<DesignJob[] | null>(null);
   const [gpus, setGpus] = useState<GpuStatus[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +52,7 @@ export function DesignDashboard() {
 
   const columns: Column<DesignJob>[] = [
     { key: "name", header: "Name", render: (d) => (
-      <button className="text-brand-700 hover:underline" onClick={() => navigate(`/design/${d.id}`)}>
+      <button className="text-brand-700 hover:underline" onClick={() => navigate(`${base}/${d.id}`)}>
         {d.name}
       </button>
     ) },
@@ -60,7 +62,7 @@ export function DesignDashboard() {
       <div className="w-32">
         <ProgressBar value={d.progress} />
         <div className="mt-0.5 text-xs text-slate-500">
-          gen {d.current_generation}/{d.num_generations} · {d.progress.toFixed(0)}%
+          {isAS ? "round" : "gen"} {d.current_generation}/{d.num_generations} · {d.progress.toFixed(0)}%
         </div>
       </div>
     ) },
@@ -75,13 +77,24 @@ export function DesignDashboard() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-slate-900">Peptide Design</h1>
+      <div>
+        <h1 className="text-xl font-semibold text-slate-900">
+          {isAS ? "AutoScientist Design" : "Peptide Design"}
+        </h1>
+        {isAS && (
+          <p className="mt-1 text-sm text-slate-500">
+            A self-organizing LLM agent team (AutoScientists, arXiv:2605.28655) designs the peptide:
+            agents propose research directions, an analyst proposes candidate sequences along each
+            direction (filtering weak ideas before they cost compute), candidates are evaluated by
+            docking (+ MD/MM-GBSA), and the team reorganizes around productive directions — retiring
+            dead-ends — when progress stalls. Requires a Gemini key (set in Admin).
+          </p>
+        )}
       </div>
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
-      <CreateDesignForm onCreated={() => refresh()} />
+      <CreateDesignForm strategy={strategy} onCreated={() => refresh()} />
 
       <Card title="Design GPU pool">
         {designGpus.length === 0 ? (
@@ -107,21 +120,26 @@ export function DesignDashboard() {
         )}
       </Card>
 
-      <Card title="Design runs">
+      <Card title={isAS ? "AutoScientist runs" : "Design runs"}>
         {jobs === null ? (
           <Spinner label="Loading design runs…" />
-        ) : jobs.length === 0 ? (
-          <EmptyState>No design runs yet. Start one above.</EmptyState>
-        ) : (
-          <DataTable columns={columns} rows={jobs} rowKey={(d) => d.id} />
-        )}
+        ) : (() => {
+          const rows = jobs.filter((d) => (d.strategy ?? "ga") === strategy);
+          return rows.length === 0 ? (
+            <EmptyState>No {isAS ? "AutoScientist" : "design"} runs yet. Start one above.</EmptyState>
+          ) : (
+            <DataTable columns={columns} rows={rows} rowKey={(d) => d.id} />
+          );
+        })()}
       </Card>
     </div>
   );
 }
 
-function CreateDesignForm({ onCreated }: { onCreated: () => void }) {
+function CreateDesignForm({ onCreated, strategy = "ga" }: { onCreated: () => void; strategy?: DesignStrategy }) {
   const navigate = useNavigate();
+  const isAS = strategy === "autoscientist";
+  const base = isAS ? "/autoscientist" : "/design";
   const [name, setName] = useState("");
   const [sequences, setSequences] = useState("");
   const [smiles, setSmiles] = useState("");
@@ -168,10 +186,10 @@ function CreateDesignForm({ onCreated }: { onCreated: () => void }) {
         name, initial_sequences: sequences, population_size: population,
         num_generations: generations, dock_oversample: dockOversample, md_length_ns: mdNs,
         n_replicas: mdReplicas, exhaustiveness, eval_mode: evalMode, dock_engine: dockEngine,
-        compound_name: compoundName, smiles: smiles.trim() || undefined, compound,
+        strategy, compound_name: compoundName, smiles: smiles.trim() || undefined, compound,
       });
       onCreated();
-      navigate(`/design/${job.id}`);
+      navigate(`${base}/${job.id}`);
     } catch (err) {
       setError(normalizeError(err).message);
     } finally {
@@ -183,7 +201,7 @@ function CreateDesignForm({ onCreated }: { onCreated: () => void }) {
   const inputCls = "mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm";
 
   return (
-    <Card title="New peptide-design run">
+    <Card title={isAS ? "New AutoScientist design run" : "New peptide-design run"}>
       <form onSubmit={submit} className="space-y-4">
         {error && <ErrorBanner message={error} code="Could not start design" />}
         <div className="grid gap-3 sm:grid-cols-2">
@@ -224,17 +242,24 @@ function CreateDesignForm({ onCreated }: { onCreated: () => void }) {
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          <NumField label="Population" value={population} setValue={setPopulation} min={2} max={200} />
-          <NumField label="Generations" value={generations} setValue={setGenerations} min={1} max={100} />
-          <NumField label="Dock ×N (hybrid)" value={dockOversample} setValue={setDockOversample} min={1} max={20} />
+          <NumField label={isAS ? "Candidates/round" : "Population"} value={population} setValue={setPopulation} min={2} max={200} />
+          <NumField label={isAS ? "Rounds" : "Generations"} value={generations} setValue={setGenerations} min={1} max={100} />
+          <NumField label={isAS ? "Research directions" : "Dock ×N (hybrid)"} value={dockOversample} setValue={setDockOversample} min={1} max={20} />
           <NumField label="MD length (ns)" value={mdNs} setValue={setMdNs} min={1} max={1000} />
           <NumField label="Replicas/cand." value={mdReplicas} setValue={setMdReplicas} min={1} max={5} />
           <NumField label="Exhaustiveness" value={exhaustiveness} setValue={setExhaustiveness} min={1} max={64} />
         </div>
         <p className="-mt-2 text-xs text-slate-500">
-          Dock ×N (hybrid only): each generation docks Population × N candidates and MD-refines the
-          top Population by docking score (N=1 ⇒ MD all docked). Replicas/cand.: independent MD
-          repeats per candidate; fitness uses the mean ΔG (multiplies MD cost).
+          {isAS ? (
+            <>The agent team runs <b>Rounds</b> discussion→execution cycles, proposing up to{" "}
+            <b>Candidates/round</b> sequences spread across <b>Research directions</b> (mechanistic
+            hypotheses). Each candidate is docked (+ MD-refined in hybrid mode); the champion is
+            promoted only past a noise-aware gate, and directions are retired when they stop helping.</>
+          ) : (
+            <>Dock ×N (hybrid only): each generation docks Population × N candidates and MD-refines the
+            top Population by docking score (N=1 ⇒ MD all docked). Replicas/cand.: independent MD
+            repeats per candidate; fitness uses the mean ΔG (multiplies MD cost).</>
+          )}
         </p>
 
         <div className="grid gap-3 sm:grid-cols-2">

@@ -472,6 +472,7 @@ export interface TrajectoryPayload {
 
 export type DesignEvalMode = "hybrid" | "md_only";
 export type DesignDockEngine = "vina" | "smina" | "gnina" | "auto";
+export type DesignStrategy = "ga" | "autoscientist";
 
 export interface DesignJob {
   id: string;
@@ -487,6 +488,7 @@ export interface DesignJob {
   n_replicas: number;
   eval_mode: DesignEvalMode;
   dock_engine: DesignDockEngine;
+  strategy: DesignStrategy;
   current_generation: number;
   progress: number;
   assigned_gpu: number | null;
@@ -534,6 +536,7 @@ export interface DesignJobCreate {
   exhaustiveness: number;
   eval_mode: DesignEvalMode;     // hybrid (dock→top-k MD) | md_only (MD all)
   dock_engine: DesignDockEngine; // vina | smina | gnina | auto
+  strategy?: DesignStrategy;     // "ga" (default) | "autoscientist"
   compound_name: string;
   smiles?: string;
   compound?: File | null;

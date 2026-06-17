@@ -269,25 +269,55 @@ def _design_facts(config: Dict[str, Any], settings: Dict[str, Any]) -> Dict[str,
 
 def _design_prompt(facts: Dict[str, Any], result: Dict[str, Any]) -> str:
     gens = result.get("generations", [])
+    asb = result.get("autoscientist")
     payload = {
         "design_setup": facts,
         "best_sequence": result.get("best_sequence"),
         "best_fitness": result.get("best_fitness"),
         "best_docking_score": result.get("best_docking_score"),
         "best_md_dg": result.get("best_md_dg"),
-        "n_generations_run": len(gens),
-        "convergence": [{"generation": g.get("generation"), "best_fitness": g.get("best_fitness")}
+        "n_rounds_run": len(gens),
+        "convergence": [{"step": g.get("generation"), "best_fitness": g.get("best_fitness")}
                         for g in gens],
     }
+    if asb:
+        # Reframe the setup in AutoScientists terms (drop GA-only "pool/generation" framing so the
+        # narrative does not describe a genetic algorithm).
+        payload["design_setup"] = {
+            "strategy": "AutoScientists self-organizing LLM agent team",
+            "rounds": facts["num_generations"],
+            "candidates_per_round": facts["population_size"],
+            "n_research_directions": asb.get("n_directions"),
+            "evaluation_mode": facts["eval_mode"],
+            "dock_engine": facts["dock_engine"], "md_engine": facts["md_engine"],
+            "md_length_ns": facts["md_length_ns"], "n_replicas": facts["n_replicas"],
+            "protein_ff": facts["protein_ff"], "water_model": facts["water_model"],
+            "ligand_ff": facts["ligand_ff"],
+        }
+        payload["research_directions"] = asb.get("directions")
+        payload["dead_end_directions"] = asb.get("dead_end_directions")
+        payload["n_candidates"] = asb.get("n_candidates")
+        method_desc = (
+            "an AUTOSCIENTISTS run — a self-organizing LLM agent team (arXiv:2605.28655) that drives "
+            "peptide design through shared experimental state: agents propose research directions "
+            "(mechanistic hypotheses), an analyst proposes candidate sequences along each direction "
+            "(critiquing weak ideas before they cost compute), candidates are evaluated by docking "
+            "(+ MD/MM-GBSA), the champion is promoted only past a noise-aware gate, and the team "
+            "reorganizes (retiring dead-end directions) when progress stagnates")
+        results_focus = ("the best peptide, its fitness/ΔG, which research directions were productive "
+                         "vs retired as dead-ends, and whether the search converged")
+    else:
+        method_desc = ("a genetic-algorithm peptide-design run that screened candidates by docking "
+                       "and refined the best by MD + MM-GBSA")
+        results_focus = "the best peptide, its fitness/ΔG, and whether the GA converged"
     return (
-        "You are a computational chemist writing up a genetic-algorithm peptide-design run that "
-        "screened candidates by docking and refined the best by MD + MM-GBSA. Using ONLY the data "
-        "below (invent nothing), return a JSON object with EXACTLY these string keys:\n"
-        '  "methods": a publication-ready Methods paragraph describing the GA (population, generations, '
-        "docking oversample/MD-refinement scheme), docking engine, and MD/force-field settings from "
-        "`design_setup`.\n"
-        '  "results": 2–4 sentences on the outcome — the best peptide, its fitness/ΔG, and whether the '
-        "GA converged (from `convergence`). MM-GBSA ΔG is a relative ranking score, not absolute affinity.\n"
+        f"You are a computational chemist writing up {method_desc}. Using ONLY the data below "
+        "(invent nothing), return a JSON object with EXACTLY these string keys:\n"
+        '  "methods": a publication-ready Methods paragraph describing the search strategy, docking '
+        "engine, and MD/force-field settings from `design_setup` (and, if present, the research "
+        "directions and self-reorganization scheme).\n"
+        f'  "results": 2–4 sentences on the outcome — {results_focus} (from `convergence`). MM-GBSA '
+        "ΔG is a relative ranking score, not absolute affinity.\n"
         '  "figures": an object with key "convergence" mapping to a one-sentence interpretation.\n'
         '  "limitations": one short sentence on caveats.\n\nDATA:\n' + json.dumps(payload, default=str)
     )
@@ -311,11 +341,34 @@ def _design_fallback(facts: Dict[str, Any], result: Dict[str, Any]) -> Dict[str,
             "limitations": "Relative ranking only; designs warrant experimental validation."}
 
 
+def _design_fallback_as(facts: Dict[str, Any], result: Dict[str, Any], asb: Dict[str, Any]) -> Dict[str, Any]:
+    axes = ", ".join(d.get("axis", "") for d in (asb.get("directions") or []))
+    methods = (
+        f"Peptide design used AutoScientists, a self-organizing LLM agent team (arXiv:2605.28655): "
+        f"over {facts['num_generations']} rounds, agents proposed up to {facts['population_size']} "
+        f"candidate sequences per round across {asb.get('n_directions')} research directions "
+        f"({axes or 'mechanistic hypotheses'}), evaluating each by {facts['dock_engine']} docking "
+        f"(exhaustiveness {facts['exhaustiveness']}) and {facts['md_engine']} MD/MM-GBSA "
+        f"({facts['md_length_ns']:g} ns, {facts['n_replicas']} replica(s)) with the "
+        f"{facts['protein_ff']}/{facts['water_model'].upper()} force field, promoting the champion "
+        "only past a noise-aware gate and retiring dead-end directions on stagnation."
+    )
+    results = (
+        f"The best peptide was {result.get('best_sequence')} (fitness {_fmt(result.get('best_fitness'))}; "
+        f"docking {_fmt(result.get('best_docking_score'))}; MM-GBSA ΔG {_fmt(result.get('best_md_dg'))} "
+        f"kcal/mol, a relative ranking score) from {asb.get('n_candidates', '?')} candidates evaluated."
+    )
+    return {"methods": methods, "results": results, "figures": {},
+            "limitations": "Relative ranking only; AI-proposed designs warrant experimental validation."}
+
+
 def build_design_report(workdir: Path, config: Dict[str, Any], settings: Dict[str, Any],
                         result: Dict[str, Any]) -> str:
     facts = _design_facts(config, settings)
-    narrative = gemini.generate_json(_design_prompt(facts, result), settings=settings) \
-        or _design_fallback(facts, result)
+    _asb_for_fb = result.get("autoscientist")
+    fallback = (_design_fallback_as(facts, result, _asb_for_fb) if _asb_for_fb
+                else _design_fallback(facts, result))
+    narrative = gemini.generate_json(_design_prompt(facts, result), settings=settings) or fallback
 
     gens = result.get("generations", [])
     conv_fig = None
@@ -328,29 +381,67 @@ def build_design_report(workdir: Path, config: Dict[str, Any], settings: Dict[st
             "Design convergence", "Generation", "Best fitness (−energy)")
     figs = [("convergence", "Design convergence", conv_fig)] if conv_fig else []
 
+    asb = result.get("autoscientist")
+    is_as = bool(asb)
+    step_label = "rounds" if is_as else "generations"
     header = {
-        "title": f"Peptide design report — {workdir.name}",
-        "subtitle": f"GA {facts['population_size']}×{facts['num_generations']} · "
-                    f"{facts['eval_mode']} · dock {facts['dock_engine']} · MD {facts['md_engine']}",
+        "title": ("AutoScientist design report — " if is_as else "Peptide design report — ") + workdir.name,
+        "subtitle": ((f"AutoScientists · {facts['num_generations']} rounds × {facts['population_size']} "
+                      f"candidates · {asb.get('n_directions', facts['dock_oversample'])} directions"
+                      if is_as else
+                      f"GA {facts['population_size']}×{facts['num_generations']}")
+                     + f" · {facts['eval_mode']} · dock {facts['dock_engine']} · MD {facts['md_engine']}"),
     }
-    cond_rows = [
-        ("Evaluation mode", facts["eval_mode"]),
-        ("Population × generations", f"{facts['population_size']} × {facts['num_generations']}"),
-        ("Docking screen", f"{facts['dock_pool_per_gen']}/gen ({facts['dock_engine']}, "
-                            f"exhaustiveness {facts['exhaustiveness']}) → MD top {facts['md_per_gen']}"),
-        ("MD refinement", f"{facts['md_engine']}, {facts['md_length_ns']:g} ns, "
-                          f"{facts['n_replicas']} replica(s)"),
-        ("Force field", f"{facts['protein_ff']}/{facts['water_model'].upper()}, ligand {facts['ligand_ff'].upper()}"),
-    ]
+    if is_as:
+        cond_rows = [
+            ("Strategy", "AutoScientists — self-organizing LLM agent team (arXiv:2605.28655)"),
+            ("Search budget", f"{facts['num_generations']} rounds × ≤{facts['population_size']} "
+                              f"candidates/round · {asb.get('n_directions')} research directions"),
+            ("Evaluation", f"{facts['eval_mode']} · dock {facts['dock_engine']} "
+                           f"(exhaustiveness {facts['exhaustiveness']}) → MD {facts['md_engine']} "
+                           f"{facts['md_length_ns']:g} ns × {facts['n_replicas']}"),
+            ("Force field", f"{facts['protein_ff']}/{facts['water_model'].upper()}, ligand {facts['ligand_ff'].upper()}"),
+            ("Candidates evaluated", str(asb.get("n_candidates", "—"))),
+        ]
+    else:
+        cond_rows = [
+            ("Evaluation mode", facts["eval_mode"]),
+            ("Population × generations", f"{facts['population_size']} × {facts['num_generations']}"),
+            ("Docking screen", f"{facts['dock_pool_per_gen']}/gen ({facts['dock_engine']}, "
+                                f"exhaustiveness {facts['exhaustiveness']}) → MD top {facts['md_per_gen']}"),
+            ("MD refinement", f"{facts['md_engine']}, {facts['md_length_ns']:g} ns, "
+                              f"{facts['n_replicas']} replica(s)"),
+            ("Force field", f"{facts['protein_ff']}/{facts['water_model'].upper()}, ligand {facts['ligand_ff'].upper()}"),
+        ]
     metric_rows = [
         ("Best peptide", str(result.get("best_sequence"))),
         ("Best fitness", _fmt(result.get("best_fitness"))),
         ("Best docking score", f"{_fmt(result.get('best_docking_score'))} kcal/mol"),
         ("Best MM-GBSA ΔG (relative)", f"{_fmt(result.get('best_md_dg'))} kcal/mol"),
-        ("Generations run", _fmt(len(gens), 0)),
+        (f"{step_label.capitalize()} run", _fmt(len(gens), 0)),
     ]
+    extra_sections = _autoscientist_section(asb) if is_as else None
     return _assemble_html(header, cond_rows, narrative, figs, metric_rows, trajectory=None,
-                          extra_caveats=[])
+                          extra_caveats=[], extra_sections=extra_sections)
+
+
+def _autoscientist_section(asb: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """Render the AutoScientists research-process artifacts: directions, dead-ends, forum log."""
+    dirs = asb.get("directions") or []
+    dir_rows = "".join(
+        f"<tr><th>{_esc(d.get('axis'))}</th><td>{_esc(d.get('hypothesis'))}</td></tr>" for d in dirs)
+    dead = asb.get("dead_end_directions") or []
+    dead_html = ("<p><b>Retired (dead-end) directions:</b> " + ", ".join(_esc(d) for d in dead) + "</p>"
+                 if dead else "<p class='muted'>No directions were retired.</p>")
+    forum = asb.get("forum") or []
+    forum_html = ("<ul>" + "".join(f"<li>{_esc(p)}</li>" for p in forum) + "</ul>"
+                  if forum else "<p class='muted'>No forum activity recorded.</p>")
+    body = (
+        "<p class='muted'>The self-organizing agent team explored these research directions "
+        "(mechanistic hypotheses), retiring those that stopped yielding improvements.</p>"
+        f"<table>{dir_rows}</table>{dead_html}"
+        "<h3 style='font-size:1rem;margin-top:1rem'>Search log</h3>" + forum_html)
+    return [("Research directions & search process", body)]
 
 
 # ───────────────────────────── HTML assembly ─────────────────────────────
@@ -358,7 +449,8 @@ def build_design_report(workdir: Path, config: Dict[str, Any], settings: Dict[st
 def _assemble_html(header: Dict[str, str], conditions: List[Tuple[str, str]],
                    narrative: Dict[str, Any], figures: List[Tuple[str, str, Dict[str, Any]]],
                    metrics: List[Tuple[str, str]], trajectory: Optional[Path],
-                   extra_caveats: List[str]) -> str:
+                   extra_caveats: List[str],
+                   extra_sections: Optional[List[Tuple[str, str]]] = None) -> str:
     def table(rows: List[Tuple[str, str]]) -> str:
         return ("<table>" + "".join(
             f"<tr><th>{_esc(k)}</th><td>{_esc(v)}</td></tr>" for k, v in rows) + "</table>")
@@ -419,6 +511,9 @@ def _assemble_html(header: Dict[str, str], conditions: List[Tuple[str, str]],
     html = html.replace("__METRICS__", table(metrics))
     html = html.replace("__FIGURES__", "\n".join(fig_blocks) or "<p class='muted'>No figures.</p>")
     html = html.replace("__TRAJECTORY__", traj_section)
+    sections_html = "".join(
+        f"<section><h2>{_esc(t)}</h2>{body}</section>" for t, body in (extra_sections or []))
+    html = html.replace("__EXTRA_SECTIONS__", sections_html)
     html = html.replace("__LIMITATIONS__",
                         _esc(lim) + ("<br>" + "<br>".join(_esc(c) for c in caveats) if caveats else ""))
     html = html.replace("__GENERATED__", f"Narrative by {_esc(model_name)} · generated {gen_at}")
@@ -461,6 +556,7 @@ footer{margin-top:2.5rem;padding-top:1rem;border-top:1px solid var(--line);color
 <section><h2>Results &amp; interpretation</h2><p>__RESULTS__</p>__METRICS__</section>
 <section><h2>Figures</h2>__FIGURES__</section>
 __TRAJECTORY__
+__EXTRA_SECTIONS__
 <section><h2>Limitations</h2><div class="note">__LIMITATIONS__</div></section>
 <footer>__GENERATED__. Conditions tables are derived directly from the run; narrative text is
 AI-generated and should be checked before publication.</footer>

@@ -312,6 +312,10 @@ class DesignJob(Base):
     eval_mode: Mapped[str] = mapped_column(String(16), default="hybrid", nullable=False)
     # Docking engine for this run: "vina" (default) | "smina" | "auto".
     dock_engine: Mapped[str] = mapped_column(String(16), default="vina", nullable=False)
+    # Design strategy: "ga" (genetic algorithm, default) | "autoscientist" (LLM self-organizing
+    # agent team, arXiv:2605.28655). Numeric knobs (population_size/num_generations/dock_oversample)
+    # are reinterpreted per strategy — see worker/mdworker/design/autoscientist.py.
+    strategy: Mapped[str] = mapped_column(String(20), default="ga", nullable=False, index=True)
 
     # Progress + results.
     current_generation: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

@@ -7,6 +7,7 @@ const NAV_LINKS: { to: string; label: string; end?: boolean }[] = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/md", label: "MD" },
   { to: "/design", label: "Peptide Design" },
+  { to: "/autoscientist", label: "AutoScientist" },
 ];
 
 function navLinkClass({ isActive }: { isActive: boolean }): string {

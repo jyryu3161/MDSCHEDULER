@@ -37,6 +37,8 @@ export default function App() {
         <Route path="/md" element={<Dashboard />} />
         <Route path="/design" element={<DesignDashboard />} />
         <Route path="/design/:designId" element={<DesignDetail />} />
+        <Route path="/autoscientist" element={<DesignDashboard strategy="autoscientist" />} />
+        <Route path="/autoscientist/:designId" element={<DesignDetail />} />
         <Route path="/upload" element={<Upload />} />
         <Route path="/jobs/:jobId" element={<JobDetail />} />
         <Route path="/jobs/:jobId/results" element={<Results />} />

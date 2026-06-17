@@ -80,6 +80,7 @@ async def create_design(
     exhaustiveness: int = Form(8),
     eval_mode: str = Form("hybrid"),
     dock_engine: str = Form("vina"),
+    strategy: str = Form("ga"),
     compound_name: str = Form("compound"),
     smiles: str | None = Form(None),
     compound: UploadFile | None = File(None),
@@ -92,7 +93,7 @@ async def create_design(
             name=name, initial_sequences=seqs, population_size=population_size,
             num_generations=num_generations, dock_oversample=dock_oversample, md_length_ns=md_length_ns,
             n_replicas=n_replicas, exhaustiveness=exhaustiveness, eval_mode=eval_mode,
-            dock_engine=dock_engine, smiles=smiles, compound_name=compound_name,
+            dock_engine=dock_engine, strategy=strategy, smiles=smiles, compound_name=compound_name,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
@@ -143,6 +144,7 @@ async def create_design(
             population_size=cfg.population_size, num_generations=cfg.num_generations,
             dock_oversample=cfg.dock_oversample, md_length_ns=cfg.md_length_ns, n_replicas=cfg.n_replicas,
             exhaustiveness=cfg.exhaustiveness, eval_mode=cfg.eval_mode, dock_engine=cfg.dock_engine,
+            strategy=cfg.strategy,
             created_at=utcnow(),
         )
         db.add(dj)
