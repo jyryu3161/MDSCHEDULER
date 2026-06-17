@@ -207,11 +207,16 @@ other than `/auth/login` require auth. Admin-only endpoints checked by role.
 - `GET /api/auth/me` → `{id, username, role, must_change_password, is_active, created_at}`.
 
 ### Uploads (§19.3)
-- `POST /api/uploads/input` multipart form: fields `pose_file` (PDBQT, required),
+- `POST /api/uploads/input` multipart form: fields `pose_file` (PDBQT),
   `chemistry_file` (SDF/MOL2, optional), `receptor_file` (PDB/CIF, optional),
   `smiles` (str, optional), plus optional metadata. Returns
   `{upload_id, pose_file, chemistry_file, receptor_file, detected_pose_count, detected_input_type, ligand_type_candidates:[...], hetatm_candidates:[...]}`.
   Stores files under `storage/uploads/{upload_id}/`.
+  - Either `pose_file` **or** complex-input mode is required. Complex mode: omit
+    `pose_file` and supply a protein+ligand **complex** (CIF/PDB) in `receptor_file`
+    plus a ligand `smiles`; the server splits the complex into a protein-only
+    receptor + the ligand's bound coordinates as a single pose (no docking score),
+    so the downstream pipeline runs unchanged.
 - `GET /api/uploads/{upload_id}/validate` → ValidationReport (see §7).
 
 ### Jobs (§19.2)

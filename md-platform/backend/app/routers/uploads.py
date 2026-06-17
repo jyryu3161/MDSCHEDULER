@@ -57,11 +57,36 @@ async def _save_upload(dest_dir: Path, field_name: str, upload: UploadFile, max_
     return filename
 
 
+def _split_complex_upload(dest_dir: Path, complex_name: str) -> tuple[str, str, str | None]:
+    """Split an uploaded protein+ligand complex (the receptor field) into a protein-only receptor
+    PDB + a single ligand-coordinate pose PDBQT. Returns (pose_filename, receptor_filename,
+    ligand_resname) relative to dest_dir. Raises HTTPException on failure."""
+    try:
+        from mdworker.io.complex import ComplexSplitError, split_complex
+    except Exception as exc:  # noqa: BLE001 — worker/gemmi not installed in this backend
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=f"Complex-structure input requires the worker (gemmi) to be installed: {exc}",
+        )
+    src = dest_dir / complex_name
+    pose_out = dest_dir / "pose.pdbqt"
+    rec_out = dest_dir / "receptor_protein.pdb"
+    try:
+        meta = split_complex(src, rec_out, pose_out)
+    except ComplexSplitError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"Could not split the complex structure: {exc}")
+    except Exception as exc:  # noqa: BLE001 — malformed CIF/PDB
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"Failed to parse the complex structure: {exc}")
+    return "pose.pdbqt", "receptor_protein.pdb", meta.get("ligand_resname")
+
+
 @router.post("/input", response_model=UploadResponse)
 async def upload_input(
-    pose_file: UploadFile = File(..., description="AutoDock Vina PDBQT with poses (required)"),
+    pose_file: UploadFile | None = File(default=None, description="AutoDock Vina PDBQT with poses"),
     chemistry_file: UploadFile | None = File(default=None, description="SDF/MOL2 chemistry template"),
-    receptor_file: UploadFile | None = File(default=None, description="Receptor PDB/CIF"),
+    receptor_file: UploadFile | None = File(default=None, description="Receptor PDB/CIF, or a protein+ligand COMPLEX (CIF/PDB)"),
     smiles: str | None = Form(default=None),
     name: str | None = Form(default=None),
     user: User = Depends(get_current_user),
@@ -72,7 +97,9 @@ async def upload_input(
     storage.ensure_dirs(dest_dir)
 
     max_bytes = settings.max_upload_bytes
-    pose_name = await _save_upload(dest_dir, "pose.pdbqt", pose_file, max_bytes)
+    pose_name = None
+    if pose_file is not None and pose_file.filename:
+        pose_name = await _save_upload(dest_dir, "pose.pdbqt", pose_file, max_bytes)
 
     chem_name = None
     if chemistry_file is not None and chemistry_file.filename:
@@ -81,6 +108,22 @@ async def upload_input(
     rec_name = None
     if receptor_file is not None and receptor_file.filename:
         rec_name = await _save_upload(dest_dir, "receptor", receptor_file, max_bytes)
+
+    # Complex-input mode: no docked poses, but a protein+ligand COMPLEX (CIF/PDB) + a ligand
+    # SMILES. Split the complex into a protein-only receptor + the ligand's coordinates as a single
+    # pose (no docking), so the unchanged downstream pipeline runs. SMILES gives the bond orders.
+    input_mode = "poses"
+    ligand_resname = None
+    if pose_name is None and rec_name is not None and smiles and smiles.strip():
+        pose_name, rec_name, ligand_resname = _split_complex_upload(dest_dir, rec_name)
+        input_mode = "complex"
+
+    if pose_name is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide docked poses (PDBQT), or a protein+ligand complex structure "
+                   "(CIF/PDB in the receptor field) together with the ligand SMILES.",
+        )
 
     # Persist a manifest so /validate and job creation can reconstruct paths.
     meta = {
@@ -91,6 +134,8 @@ async def upload_input(
         "chemistry_file": chem_name,
         "receptor_file": rec_name,
         "smiles": smiles,
+        "input_mode": input_mode,
+        "ligand_resname": ligand_resname,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     storage.write_json(dest_dir / "meta.json", meta)

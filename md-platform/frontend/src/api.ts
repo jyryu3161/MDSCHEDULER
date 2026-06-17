@@ -145,7 +145,9 @@ export const authApi = {
 // ── Uploads (CONTRACT §5 Uploads) ────────────────────────────────────────────
 
 export interface UploadInputArgs {
-  poseFile: File;
+  // Optional: in complex-CIF mode the receptor field holds a protein+ligand complex and the
+  // server derives the pose from it, so no separate pose file is uploaded.
+  poseFile?: File | null;
   chemistryFile?: File | null;
   receptorFile?: File | null;
   smiles?: string;
@@ -154,7 +156,7 @@ export interface UploadInputArgs {
 export const uploadApi = {
   async createInput(args: UploadInputArgs): Promise<UploadResponse> {
     const form = new FormData();
-    form.append("pose_file", args.poseFile);
+    if (args.poseFile) form.append("pose_file", args.poseFile);
     if (args.chemistryFile) form.append("chemistry_file", args.chemistryFile);
     if (args.receptorFile) form.append("receptor_file", args.receptorFile);
     if (args.smiles && args.smiles.trim()) {

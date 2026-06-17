@@ -126,6 +126,12 @@ export function Upload() {
   const effectiveMdLength =
     preset === "custom" ? mdLengthNs : PRESET_NS[preset];
 
+  // Complex-CIF mode: no docked poses, but a protein+ligand complex (CIF/PDB) in the receptor
+  // field together with the ligand SMILES. The server splits the complex into a protein-only
+  // receptor + the ligand's bound coordinates as a single pose, so the pipeline runs unchanged.
+  const complexMode = !poseFile && Boolean(receptorFile) && smiles.trim().length > 0;
+  const canUpload = (Boolean(poseFile) || complexMode) && !validating;
+
   // The job is blocked when validation has a hard-rule failure (CONTRACT §7).
   const blockingReason = useMemo<string | null>(() => {
     if (!report) return null;
@@ -158,7 +164,7 @@ export function Upload() {
   };
 
   const onUploadAndValidate = async () => {
-    if (!poseFile) return;
+    if (!poseFile && !complexMode) return;
     setValidating(true);
     setValidateError(null);
     setReport(null);
@@ -314,7 +320,9 @@ export function Upload() {
         <p className="mt-1 text-sm text-slate-500">
           Upload a docking pose file with a ligand chemistry definition and a
           receptor structure. Coordinates come from the poses; chemistry comes
-          from the definition file.
+          from the definition file. Alternatively, upload a protein+ligand
+          complex (CIF/PDB) in the receptor field with a SMILES and no pose
+          file — it is split into a receptor + a single bound pose.
         </p>
       </div>
 
@@ -324,9 +332,13 @@ export function Upload() {
           <FileField
             id="pose-file"
             label="Docking poses (PDBQT)"
-            hint="AutoDock Vina multi-pose PDBQT. Used for coordinates only."
+            hint={
+              complexMode
+                ? "Optional in complex mode — the pose is derived from the complex below."
+                : "AutoDock Vina multi-pose PDBQT. Used for coordinates only. Omit if you upload a protein+ligand complex below."
+            }
             accept=".pdbqt,.txt"
-            required
+            required={!complexMode}
             file={poseFile}
             onChange={(f) => {
               setPoseFile(f);
@@ -347,7 +359,7 @@ export function Upload() {
           <FileField
             id="receptor-file"
             label="Receptor (PDB / CIF)"
-            hint="Peptide or protein receptor structure."
+            hint="Receptor structure — or a protein+ligand COMPLEX (CIF/PDB). With no pose file and a SMILES, the complex is split into receptor + a single bound pose."
             accept=".pdb,.cif,.mmcif,.ent"
             file={receptorFile}
             onChange={(f) => {
@@ -370,7 +382,9 @@ export function Upload() {
               }}
             />
             <p className="mt-1 text-xs text-slate-500">
-              Accepted only if atom mapping to the poses succeeds.
+              {complexMode
+                ? "Supplies bond orders for the ligand extracted from the complex."
+                : "Accepted only if atom mapping to the poses succeeds."}
             </p>
           </div>
         </div>
@@ -379,7 +393,7 @@ export function Upload() {
           <button
             type="button"
             className="btn-primary"
-            disabled={!poseFile || validating}
+            disabled={!canUpload}
             onClick={onUploadAndValidate}
           >
             {validating ? "Validating…" : "Upload and validate"}
