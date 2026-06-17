@@ -195,19 +195,19 @@ def _parse_decomp(decomp_dat: Path) -> List[Dict[str, Any]]:
 
 
 def _write_per_residue_plot(plots_dir: Path, residues: List[Dict[str, Any]]) -> None:
-    """Bar chart of per-residue ΔG along the peptide sequence (favorable = negative = green)."""
+    """Bar chart of per-residue ΔG along the peptide sequence. Favorable (ΔG<0) bars are blue,
+    unfavorable (ΔG>0) vermillion — a colorblind-safe diverging pair (green/red is not), via the
+    shared publication theme (mdworker.analysis.theme)."""
+    from mdworker.analysis import theme
     labels = [f"{r['resname']}{r['resnum']}" for r in residues]
     vals = [r["total_dg"] for r in residues]
-    colors = ["#2ca02c" if v < 0 else "#d62728" for v in vals]  # green favorable, red unfavorable
+    colors = [theme.C_FAVORABLE if v < 0 else theme.C_UNFAVORABLE for v in vals]
     fig = {
         "data": [{"x": labels, "y": vals, "type": "bar", "name": "ΔG contribution",
-                  "marker": {"color": colors}}],
-        "layout": {
-            "title": {"text": "Per-residue binding ΔG contribution (peptide)"},
-            "xaxis": {"title": {"text": "Residue"}},
-            "yaxis": {"title": {"text": "ΔG contribution (kcal/mol)"}},
-            "margin": {"l": 60, "r": 20, "t": 50, "b": 50}, "template": "plotly_white",
-        },
+                  "marker": {"color": colors, "line": {"color": theme.INK, "width": 0.6}}}],
+        "layout": theme.pub_layout(
+            "Per-residue binding ΔG contribution (peptide)",
+            "Residue", "ΔG contribution (kcal/mol)", legend=False),
     }
     plots_dir.mkdir(parents=True, exist_ok=True)
     (plots_dir / "per_residue.json").write_text(json.dumps(fig))

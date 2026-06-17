@@ -18,6 +18,7 @@ import {
 const PlotlyChart = lazy(() =>
   import("../components/PlotlyChart").then((m) => ({ default: m.PlotlyChart })));
 import type { DesignCandidate, DesignJobDetail, PlotlyFigure } from "../types";
+import { LINE_WIDTH, PALETTE, pubLayout } from "../plotTheme";
 
 const POLL_MS = 4000;
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
@@ -80,7 +81,7 @@ export function DesignDetail() {
       {
         x: gens, y: detail.generations.map((p) => p.best_fitness),
         type: "scatter", mode: "lines+markers", name: "Best fitness (−ΔG / −dock)",
-        line: { color: "#2563eb" },
+        line: { color: PALETTE[0], width: LINE_WIDTH }, marker: { size: 5 },
       },
     ];
     // Only show the MM/GBSA ΔG trace once at least one generation has an MD-refined value,
@@ -89,18 +90,14 @@ export function DesignDetail() {
       data.push({
         x: gens, y: detail.generations.map((p) => p.best_md_dg),
         type: "scatter", mode: "lines+markers", name: "Best MM/GBSA ΔG",
-        line: { color: "#16a34a", dash: "dot" }, connectgaps: true,
+        line: { color: PALETTE[1], width: LINE_WIDTH, dash: "dot" }, marker: { size: 5 },
+        connectgaps: true,
       });
     }
-    return {
-      data,
-      layout: {
-        xaxis: { title: { text: "Generation" }, dtick: 1 },
-        yaxis: { title: { text: "kcal/mol (fitness = −energy)" } },
-        margin: { l: 60, r: 20, t: 30, b: 45 }, template: "plotly_white",
-        legend: { orientation: "h", y: -0.2 },
-      },
-    };
+    const layout = pubLayout("Design convergence", "Generation",
+                             "Fitness = −energy (kcal/mol)", { legend: true });
+    (layout.xaxis as Record<string, unknown>).dtick = 1;
+    return { data, layout };
   }, [detail]);
 
   if (!detail) return error ? <ErrorBanner message={error} /> : <Spinner label="Loading design run…" />;

@@ -25,6 +25,7 @@ from typing import Any, Dict, List
 import numpy as np
 
 from mdworker.pipeline import structures as struct
+from mdworker.analysis import theme
 
 _POLAR = {"N", "O", "F", "S"}
 _HBOND_CUTOFF = 3.5      # Angstrom, heavy-atom donor/acceptor proximity proxy
@@ -39,16 +40,9 @@ _LOW_OCCUPANCY = 0.5
 
 
 def _fig(traces: List[dict], title: str, xaxis: str, yaxis: str, *, extra_layout: dict | None = None) -> dict:
-    layout = {
-        "title": {"text": title},
-        "xaxis": {"title": {"text": xaxis}},
-        "yaxis": {"title": {"text": yaxis}},
-        "margin": {"l": 60, "r": 20, "t": 50, "b": 50},
-        "template": "plotly_white",
-    }
-    if extra_layout:
-        layout.update(extra_layout)
-    return {"data": traces, "layout": layout}
+    # Publication-quality styling (palette, axes, fonts, white bg) lives in
+    # mdworker.analysis.theme so every figure — here, MM-PBSA, and the frontend — matches.
+    return theme.figure(traces, title, xaxis, yaxis, extra_layout=extra_layout)
 
 
 def _write_csv(path: Path, header: List[str], rows: List[List[Any]]) -> None:
@@ -117,12 +111,14 @@ def run(ctx, settings, *, md: Dict[str, Any]) -> Dict[str, Any]:
     _write_csv(ctx.analysis_dir / "rmsd.csv", ["time_ns", "backbone_rmsd_A", "ligand_rmsd_A"],
                [[times_ns[i], round(bb_rmsd[i], 4), round(lig_rmsd[i], 4)] for i in range(n_frames)])
     _save(plots_dir / "rmsd.json", _fig(
-        [{"x": times_ns, "y": bb_rmsd, "type": "scatter", "mode": "lines", "name": "Backbone"},
-         {"x": times_ns, "y": lig_rmsd, "type": "scatter", "mode": "lines", "name": "Ligand"}],
+        [{"x": times_ns, "y": bb_rmsd, "type": "scatter", "mode": "lines", "name": "Backbone",
+          "line": {"color": theme.C_BACKBONE}},
+         {"x": times_ns, "y": lig_rmsd, "type": "scatter", "mode": "lines", "name": "Ligand",
+          "line": {"color": theme.C_LIGAND}}],
         "RMSD vs time", "Time (ns)", "RMSD (Å)"))
     _save(plots_dir / "ligand_rmsd.json", _fig(
         [{"x": times_ns, "y": lig_rmsd, "type": "scatter", "mode": "lines", "name": "Ligand RMSD",
-          "line": {"color": "#d62728"}}],
+          "line": {"color": theme.C_LIGAND}}],
         "Ligand RMSD (binding-pose stability)", "Time (ns)", "Ligand RMSD (Å)"))
     plots_available += ["rmsd", "ligand_rmsd"]
     summary["data_source"]["rmsd"] = "trajectory"
@@ -138,7 +134,7 @@ def run(ctx, settings, *, md: Dict[str, Any]) -> Dict[str, Any]:
                [[times_ns[i], round(rg[i], 4)] for i in range(n_frames)])
     _save(plots_dir / "rg.json", _fig(
         [{"x": times_ns, "y": rg, "type": "scatter", "mode": "lines", "name": "Rg",
-          "line": {"color": "#2ca02c"}}],
+          "line": {"color": theme.C_RG}}],
         "Radius of gyration (protein)", "Time (ns)", "Rg (Å)"))
     plots_available.append("rg")
     summary["data_source"]["rg"] = "trajectory"
@@ -164,7 +160,7 @@ def run(ctx, settings, *, md: Dict[str, Any]) -> Dict[str, Any]:
                [[times_ns[i], hbond[i]] for i in range(n_frames)])
     _save(plots_dir / "hbond.json", _fig(
         [{"x": times_ns, "y": hbond, "type": "scatter", "mode": "lines+markers", "name": "H-bonds",
-          "line": {"color": "#9467bd"}}],
+          "line": {"color": theme.C_HBOND}}],
         "Protein-ligand H-bonds (≤3.5 Å N/O proxy)", "Time (ns)", "H-bond count"))
     plots_available.append("hbond")
     summary["data_source"]["hbond"] = "trajectory (geometric proxy)"
@@ -179,7 +175,10 @@ def run(ctx, settings, *, md: Dict[str, Any]) -> Dict[str, Any]:
                    [[clabels[i], cfreq[i]] for i in range(len(cfreq))])
         _save(plots_dir / "contact_map.json", _fig(
             [{"x": clabels, "y": cfreq, "type": "bar", "name": "Contact frequency",
-              "marker": {"color": cfreq, "colorscale": "Viridis"}}],
+              "marker": {"color": cfreq, "colorscale": theme.SEQUENTIAL, "cmin": 0.0, "cmax": 1.0,
+                         "showscale": True,
+                         "colorbar": {"title": {"text": "Fraction", "side": "right"},
+                                      "thickness": 14, "len": 0.9}}}],
             "Protein-ligand contact frequency (≤4.5 Å)", "Residue", "Fraction of frames"))
         plots_available.append("contact_map")
         summary["data_source"]["contact_map"] = "trajectory"
@@ -212,7 +211,7 @@ def run(ctx, settings, *, md: Dict[str, Any]) -> Dict[str, Any]:
     sasa_note = "  [estimate]"
     _save(plots_dir / "sasa.json", _fig(
         [{"x": times_ns, "y": sasa, "type": "scatter", "mode": "lines", "name": "SASA",
-          "line": {"color": "#ff7f0e"}}],
+          "line": {"color": theme.C_SASA}}],
         "Solvent-accessible surface area" + sasa_note, "Time (ns)", "SASA (Å²)"))
     plots_available.append("sasa")
     summary["data_source"]["sasa"] = estimate_source
@@ -224,7 +223,7 @@ def run(ctx, settings, *, md: Dict[str, Any]) -> Dict[str, Any]:
     en_note = "  [estimate]"
     _save(plots_dir / "energy.json", _fig(
         [{"x": times_ns, "y": energy, "type": "scatter", "mode": "lines", "name": "Potential energy",
-          "line": {"color": "#1f77b4"}}],
+          "line": {"color": theme.C_ENERGY}}],
         "Potential energy" + en_note, "Time (ns)", "Energy (kJ/mol)"))
     plots_available.append("energy")
     summary["data_source"]["energy"] = estimate_source

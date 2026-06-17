@@ -2,26 +2,43 @@ import { useMemo } from "react";
 import createPlotlyComponent from "react-plotly.js/factory";
 import Plotly from "plotly.js-dist-min";
 import type { PlotlyFigure } from "../types";
+import { FONT_FAMILY, PALETTE } from "../plotTheme";
 
 // Bind react-plotly.js to the prebuilt dist-min bundle (smaller than the full
 // source build and avoids bundling Plotly twice).
 const Plot = createPlotlyComponent(Plotly);
 
+// Publication defaults for any figure that doesn't carry its own full layout. Worker figures
+// set a complete publication layout via mdworker.analysis.theme; this covers browser-built
+// figures (e.g. the design convergence curve) and provides a consistent font/palette/background.
 const BASE_LAYOUT: Partial<Plotly.Layout> = {
-  margin: { l: 56, r: 16, t: 36, b: 44 },
-  font: { family: "Inter, system-ui, sans-serif", size: 12, color: "#334155" },
-  paper_bgcolor: "rgba(0,0,0,0)",
-  plot_bgcolor: "rgba(0,0,0,0)",
+  margin: { l: 72, r: 26, t: 54, b: 58 },
+  font: { family: FONT_FAMILY, size: 13, color: "#1a1a1a" },
+  paper_bgcolor: "white",
+  plot_bgcolor: "white",
+  colorway: PALETTE,
   legend: { orientation: "h", y: -0.2 },
 };
 
+// Publication export: the toolbar camera writes a vector SVG (ideal for figures); a second
+// button writes a high-resolution 4× PNG. Both satisfy "downloadable figures" (PDR §14.2/§15.2).
 const CONFIG: Partial<Plotly.Config> = {
   responsive: true,
   displaylogo: false,
-  // Plotly's image-export buttons (PNG/SVG) satisfy the "graphs downloadable"
-  // requirement (PDR §14.2 / §15.2) directly from the chart toolbar.
   modeBarButtonsToRemove: ["lasso2d", "select2d"],
-  toImageButtonOptions: { format: "png", scale: 2 },
+  toImageButtonOptions: { format: "svg", filename: "md-figure", scale: 1 },
+  modeBarButtonsToAdd: [
+    {
+      name: "downloadHiResPng",
+      title: "Download high-resolution PNG (4×)",
+      icon: (Plotly as unknown as { Icons: { camera: unknown } }).Icons.camera,
+      click: (gd: unknown) =>
+        (Plotly as unknown as { downloadImage: (g: unknown, o: object) => void }).downloadImage(
+          gd,
+          { format: "png", scale: 4, filename: "md-figure" },
+        ),
+    },
+  ] as unknown as Plotly.ModeBarButtonAny[],
 };
 
 export function PlotlyChart({
