@@ -40,16 +40,31 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
 
-def _parse_subjob_id(subjob_id: str) -> tuple[str, int]:
-    """`{job_id}_pose_{NN}` -> (job_id, pose_index). job_id itself may contain underscores."""
+def _parse_subjob_id(subjob_id: str) -> tuple[str, int, int]:
+    """Parse a subjob id into (job_id, pose_index, replica_index).
+
+    Replica 1 keeps the original `{job_id}_pose_{NN}` form (replica_index 1); additional MD
+    replicas use `{job_id}_pose_{NN}_rep_{RR}`. job_id itself may contain underscores.
+    """
     marker = "_pose_"
     if marker in subjob_id:
-        job_id, pose = subjob_id.rsplit(marker, 1)
+        job_id, tail = subjob_id.rsplit(marker, 1)
+        replica = 1
+        if "_rep_" in tail:
+            pose_s, rep_s = tail.split("_rep_", 1)
+            try:
+                replica = int(rep_s)
+            except ValueError:
+                pose_s = tail  # malformed suffix -> treat whole tail as pose below
+        else:
+            pose_s = tail
         try:
-            return job_id, int(pose)
+            return job_id, int(pose_s), replica
         except ValueError:
             pass
-    raise ValueError(f"Cannot parse subjob id '{subjob_id}' (expected '<job_id>_pose_<NN>').")
+    raise ValueError(
+        f"Cannot parse subjob id '{subjob_id}' (expected '<job_id>_pose_<NN>[_rep_<RR>]')."
+    )
 
 
 def _load_metadata(storage_root: str, job_id: str) -> Dict[str, Any]:
@@ -160,7 +175,7 @@ def run_subjob(subjob_id: str, *, reporter, settings) -> Dict[str, Any]:
     truly unexpected programming errors propagate after being logged.
     """
     settings = _coerce_settings(settings)
-    job_id, pose_index = _parse_subjob_id(subjob_id)
+    job_id, pose_index, replica_index = _parse_subjob_id(subjob_id)
     storage_root = settings.storage_root
 
     try:
@@ -174,8 +189,11 @@ def run_subjob(subjob_id: str, *, reporter, settings) -> Dict[str, Any]:
 
     subjob_meta = next(
         (s for s in job_meta.get("subjobs", []) if s.get("id") == subjob_id),
-        {"id": subjob_id, "pose_index": pose_index, "docking_score": None},
+        {"id": subjob_id, "pose_index": pose_index, "replica_index": replica_index,
+         "docking_score": None},
     )
+    # Prefer the replica index recorded in metadata; fall back to the one parsed from the id.
+    replica_index = int(subjob_meta.get("replica_index", replica_index) or 1)
 
     ctx = JobContext(
         job_id=job_id,
@@ -185,6 +203,7 @@ def run_subjob(subjob_id: str, *, reporter, settings) -> Dict[str, Any]:
         reporter=reporter,
         job_meta=job_meta,
         subjob_meta=subjob_meta,
+        replica_index=replica_index,
     )
     ctx.ensure_dirs()
 

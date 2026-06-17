@@ -244,18 +244,26 @@ class JobContext:
         reporter: Reporter,
         job_meta: dict,
         subjob_meta: dict,
+        replica_index: int = 1,
     ) -> None:
         self.job_id = job_id
         self.subjob_id = subjob_id
         self.pose_index = int(pose_index)
+        self.replica_index = int(replica_index or 1)
         self.reporter = reporter
         self.job_meta = job_meta or {}
         self.subjob_meta = subjob_meta or {}
 
         self.storage_root = Path(storage_root)
         self.job_dir = self.storage_root / "jobs" / job_id
-        # pose dir is zero-padded 2-digit, 1-based (CONTRACT §8: pose_01, pose_02, ...)
-        self.pose_name = f"pose_{self.pose_index:02d}"
+        # pose dir is zero-padded 2-digit, 1-based (CONTRACT §8: pose_01, pose_02, ...). MD
+        # replicas of the same pose get a `_rep_RR` suffix; replica 1 keeps the plain `pose_NN`
+        # name so single-replica jobs (the default) are byte-identical to before. This MUST stay
+        # in sync with backend storage.pose_dirname().
+        if self.replica_index > 1:
+            self.pose_name = f"pose_{self.pose_index:02d}_rep_{self.replica_index:02d}"
+        else:
+            self.pose_name = f"pose_{self.pose_index:02d}"
         self.pose_dir = self.job_dir / self.pose_name
 
         # Standard subdirectories per CONTRACT §8.

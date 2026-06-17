@@ -33,6 +33,25 @@ def ensure_design_columns(db: Session) -> None:
         db.commit()
 
 
+def ensure_subjob_columns(db: Session) -> None:
+    """Add the replica_index column to a pre-existing subjobs table (default 1 = single replica),
+    so older databases keep working after the MD-replicas change. No-op once present."""
+    bind = db.get_bind()
+    if "subjobs" not in inspect(bind).get_table_names():
+        return
+    existing = {c["name"] for c in inspect(bind).get_columns("subjobs")}
+    changed = False
+    if "replica_index" not in existing:
+        db.execute(text("ALTER TABLE subjobs ADD COLUMN replica_index INTEGER NOT NULL DEFAULT 1"))
+        changed = True
+    job_cols = {c["name"] for c in inspect(bind).get_columns("jobs")}
+    if "n_replicas" not in job_cols:
+        db.execute(text("ALTER TABLE jobs ADD COLUMN n_replicas INTEGER NOT NULL DEFAULT 1"))
+        changed = True
+    if changed:
+        db.commit()
+
+
 def seed_admin(db: Session) -> None:
     """Create the default admin (must_change_password=True) if no users exist."""
     settings = get_settings()
@@ -54,3 +73,4 @@ def seed_all(db: Session) -> None:
     seed_admin(db)
     gpu_manager.seed_gpus(db)
     ensure_design_columns(db)
+    ensure_subjob_columns(db)

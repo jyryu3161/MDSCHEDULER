@@ -49,12 +49,17 @@ def job_dir(job_id: str) -> Path:
     return jobs_dir() / job_id
 
 
-def pose_dirname(pose_index: int) -> str:
+def pose_dirname(pose_index: int, replica_index: int = 1) -> str:
+    """Pose artifact dir name. MD replicas of a pose get a `_rep_RR` suffix; replica 1 keeps the
+    plain `pose_NN` name so single-replica jobs are byte-identical to before. MUST stay in sync
+    with the worker's JobContext.pose_name."""
+    if replica_index and int(replica_index) > 1:
+        return f"pose_{pose_index:02d}_rep_{int(replica_index):02d}"
     return f"pose_{pose_index:02d}"
 
 
-def pose_dir(job_id: str, pose_index: int) -> Path:
-    return job_dir(job_id) / pose_dirname(pose_index)
+def pose_dir(job_id: str, pose_index: int, replica_index: int = 1) -> Path:
+    return job_dir(job_id) / pose_dirname(pose_index, replica_index)
 
 
 def summary_dir(job_id: str) -> Path:

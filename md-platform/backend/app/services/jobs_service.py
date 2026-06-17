@@ -60,7 +60,12 @@ def _next_job_id(db: Session) -> str:
     return f"{prefix}{seq:03d}"
 
 
-def subjob_id(job_id: str, pose_index: int) -> str:
+def subjob_id(job_id: str, pose_index: int, replica_index: int = 1) -> str:
+    """Subjob id. Replica 1 keeps the original `{job}_pose_{NN}` form (so single-replica jobs are
+    unchanged); extra MD replicas use `{job}_pose_{NN}_rep_{RR}`. MUST stay in sync with the
+    worker's runner._parse_subjob_id()."""
+    if replica_index and int(replica_index) > 1:
+        return f"{job_id}_pose_{pose_index:02d}_rep_{int(replica_index):02d}"
     return f"{job_id}_pose_{pose_index:02d}"
 
 
@@ -107,6 +112,7 @@ def create_job_and_subjobs(
     chem_source = create.ligand_chem_source if create.ligand_chem_source in ChemSource.ALL else ChemSource.SDF
     priority = create.priority if create.priority in Priority.ALL else Priority.NORMAL
     top_poses = select_top_poses(report, int(create.top_n_poses))
+    n_replicas = max(1, min(10, int(getattr(create, "n_replicas", 1) or 1)))
 
     # Serialize id allocation + insert + commit so two concurrent creators can never
     # compute or commit the same job id. Job creation is not a hot path, so a coarse
@@ -124,6 +130,7 @@ def create_job_and_subjobs(
             status=JobStatus.QUEUED,
             md_length_ns=md_len,
             top_n_poses=int(create.top_n_poses),
+            n_replicas=n_replicas,
             force_field=create.force_field or settings.PROTEIN_FORCE_FIELD,
             ligand_force_field=create.ligand_force_field or settings.LIGAND_FORCE_FIELD,
             ligand_chem_source=chem_source,
@@ -138,20 +145,25 @@ def create_job_and_subjobs(
         db.add(job)
 
         subjobs: list[SubJob] = []
+        # Fan out each top pose into n_replicas independent subjobs (different random velocity
+        # seeds via NVT gen_seed=-1). Replica 1 reuses the canonical pose id/dir so single-replica
+        # jobs are unchanged; replicas 2..N add a `_rep_RR` suffix and are aggregated to mean ± SEM.
         for pose_index, score in top_poses:
-            sj = SubJob(
-                id=subjob_id(job_id, pose_index),
-                job_id=job_id,
-                pose_index=pose_index,
-                docking_score=float(score),
-                status=JobStatus.QUEUED,
-                progress=0.0,
-                completed_ns=0.0,
-                ns_per_day=0.0,
-                current_step="queued",
-            )
-            db.add(sj)
-            subjobs.append(sj)
+            for replica in range(1, n_replicas + 1):
+                sj = SubJob(
+                    id=subjob_id(job_id, pose_index, replica),
+                    job_id=job_id,
+                    pose_index=pose_index,
+                    replica_index=replica,
+                    docking_score=float(score),
+                    status=JobStatus.QUEUED,
+                    progress=0.0,
+                    completed_ns=0.0,
+                    ns_per_day=0.0,
+                    current_step="queued",
+                )
+                db.add(sj)
+                subjobs.append(sj)
 
         # Stage storage (dirs + copied inputs + metadata.json) BEFORE commit so a
         # committed/queued job always has its artifact tree. If staging fails we roll
@@ -188,7 +200,7 @@ def _stage_job_storage(
         storage.summary_dir(job.id),
     )
     for sj in subjobs:
-        pdir = storage.pose_dir(job.id, sj.pose_index)
+        pdir = storage.pose_dir(job.id, sj.pose_index, sj.replica_index)
         storage.ensure_dirs(
             pdir / "prep",
             pdir / "md",
@@ -219,6 +231,7 @@ def _stage_job_storage(
         "md_length_ns": job.md_length_ns,
         "md_preset": create.md_preset,
         "top_n_poses": job.top_n_poses,
+        "n_replicas": job.n_replicas,
         "force_field": job.force_field,
         "ligand_force_field": job.ligand_force_field,
         "water_model": job.water_model,
@@ -238,7 +251,8 @@ def _stage_job_storage(
             "receptor_file": upload_meta.get("receptor_file"),
         },
         "subjobs": [
-            {"id": sj.id, "pose_index": sj.pose_index, "docking_score": sj.docking_score}
+            {"id": sj.id, "pose_index": sj.pose_index, "replica_index": sj.replica_index,
+             "docking_score": sj.docking_score}
             for sj in subjobs
         ],
         "validation_report": copy.deepcopy(report.model_dump()),
@@ -335,5 +349,68 @@ def storage_estimate_gb(top_n: int, md_length_ns: int) -> float:
     return round(per_pose * max(1, top_n), 2)
 
 
-def find_pose_dir(job_id: str, pose_index: int) -> Path:
-    return storage.pose_dir(job_id, pose_index)
+def find_pose_dir(job_id: str, pose_index: int, replica_index: int = 1) -> Path:
+    return storage.pose_dir(job_id, pose_index, replica_index)
+
+
+def replica_stats(values: list[float]) -> dict:
+    """mean ± SEM (and std/min/max) across replicas. n = number of replicas, NOT frames.
+
+    Uses the sample standard deviation (ddof=1); SEM = std / sqrt(n). A single replica has no
+    spread (sem/std = 0); zero replicas yields all-None so the UI shows "—"."""
+    vals = [float(v) for v in values if isinstance(v, (int, float))]
+    n = len(vals)
+    if n == 0:
+        return {"n": 0, "mean": None, "sem": None, "std": None, "min": None, "max": None}
+    mean = sum(vals) / n
+    if n == 1:
+        return {"n": 1, "mean": round(mean, 3), "sem": 0.0, "std": 0.0,
+                "min": round(mean, 3), "max": round(mean, 3)}
+    var = sum((v - mean) ** 2 for v in vals) / (n - 1)
+    std = var ** 0.5
+    return {"n": n, "mean": round(mean, 3), "sem": round(std / (n ** 0.5), 3),
+            "std": round(std, 3), "min": round(min(vals), 3), "max": round(max(vals), 3)}
+
+
+def pose_replica_aggregates(job: Job, subjobs: list[SubJob]) -> list[dict]:
+    """Group a job's subjobs by pose and aggregate each pose's replicas to mean ± SEM of the
+    binding score + pose occupancy, reading each replica's analysis/mmpbsa.json. Returns [] for
+    single-replica jobs (nothing to aggregate)."""
+    if int(getattr(job, "n_replicas", 1) or 1) <= 1:
+        return []
+    by_pose: dict[int, list[SubJob]] = {}
+    for sj in subjobs:
+        by_pose.setdefault(sj.pose_index, []).append(sj)
+    out: list[dict] = []
+    for pose_index in sorted(by_pose):
+        reps = sorted(by_pose[pose_index], key=lambda s: s.replica_index)
+        gbsa: list[float] = []
+        pbsa: list[float] = []
+        occ: list[float] = []
+        per_rep: list[dict] = []
+        for sj in reps:
+            data = storage.read_json(
+                storage.pose_dir(job.id, sj.pose_index, sj.replica_index) / "analysis" / "mmpbsa.json"
+            ) or {}
+            g = data.get("gbsa_dg_kcal_mol")
+            p = data.get("pbsa_dg_kcal_mol")
+            o = data.get("pose_occupancy")
+            if isinstance(g, (int, float)):
+                gbsa.append(float(g))
+            if isinstance(p, (int, float)):
+                pbsa.append(float(p))
+            if isinstance(o, (int, float)):
+                occ.append(float(o))
+            per_rep.append({
+                "replica_index": sj.replica_index, "subjob_id": sj.id, "status": sj.status,
+                "gbsa_dg_kcal_mol": g, "pbsa_dg_kcal_mol": p, "pose_occupancy": o,
+            })
+        out.append({
+            "pose_index": pose_index,
+            "n_replicas": len(reps),
+            "gbsa": replica_stats(gbsa),
+            "pbsa": replica_stats(pbsa),
+            "pose_occupancy": replica_stats(occ),
+            "replicas": per_rep,
+        })
+    return out

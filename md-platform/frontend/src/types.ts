@@ -175,6 +175,7 @@ export interface JobCreate {
   ligand_type: LigandType;
   ligand_chem_source: ChemSource;
   top_n_poses: number;
+  n_replicas: number;
   md_length_ns: number;
   md_preset: MdPreset;
   force_field: string;
@@ -203,6 +204,7 @@ export interface Job {
   status: JobStatus;
   md_length_ns: number;
   top_n_poses: number;
+  n_replicas: number;
   force_field: string;
   ligand_force_field: string;
   ligand_chem_source: ChemSource;
@@ -223,6 +225,7 @@ export interface SubJob {
   id: string;
   job_id: string;
   pose_index: number;
+  replica_index: number;
   docking_score: number;
   status: JobStatus;
   assigned_gpu: number | null;
@@ -246,10 +249,38 @@ export interface JobLog {
   created_at: string;
 }
 
+export interface ReplicaStat {
+  n: number;
+  mean: number | null;
+  sem: number | null;
+  std: number | null;
+  min: number | null;
+  max: number | null;
+}
+
+export interface ReplicaResult {
+  replica_index: number;
+  subjob_id: string;
+  status: JobStatus;
+  gbsa_dg_kcal_mol: number | null;
+  pbsa_dg_kcal_mol: number | null;
+  pose_occupancy: number | null;
+}
+
+export interface PoseReplicaAggregate {
+  pose_index: number;
+  n_replicas: number;
+  gbsa: ReplicaStat;
+  pbsa: ReplicaStat;
+  pose_occupancy: ReplicaStat;
+  replicas: ReplicaResult[];
+}
+
 export interface JobDetail {
   job: Job;
   subjobs: SubJob[];
   logs: JobLog[];
+  replica_aggregates?: PoseReplicaAggregate[];
 }
 
 // ── Queue (CONTRACT §5 Queue) ────────────────────────────────────────────────

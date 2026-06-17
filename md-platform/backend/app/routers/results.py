@@ -255,7 +255,7 @@ def download_pose(
     sj = db.get(SubJob, subjob_id)
     if sj is None or sj.job_id != job_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SubJob not found.")
-    pdir = storage.pose_dir(job_id, sj.pose_index)
+    pdir = storage.pose_dir(job_id, sj.pose_index, sj.replica_index)
     prebuilt = pdir / "results.zip"
     if prebuilt.exists():
         return FileResponse(
@@ -263,7 +263,7 @@ def download_pose(
             media_type="application/zip",
             filename=f"{subjob_id}_results.zip",
         )
-    stream = storage.stream_zip_of_directory(pdir, storage.pose_dirname(sj.pose_index))
+    stream = storage.stream_zip_of_directory(pdir, storage.pose_dirname(sj.pose_index, sj.replica_index))
     return StreamingResponse(
         stream,
         media_type="application/zip",
@@ -288,7 +288,7 @@ def get_plot(
         if sj is None or sj.job_id != job_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SubJob not found.")
         fig = storage.read_json(
-            storage.pose_dir(job_id, sj.pose_index) / "analysis" / "plots" / f"{plot_type}.json"
+            storage.pose_dir(job_id, sj.pose_index, sj.replica_index) / "analysis" / "plots" / f"{plot_type}.json"
         )
         if not fig:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plot not available.")
@@ -300,12 +300,17 @@ def get_plot(
     if overlay:
         return overlay
 
-    subjobs = db.execute(select(SubJob).where(SubJob.job_id == job_id).order_by(SubJob.pose_index)).scalars().all()
+    # One trace per pose (the canonical replica 1) so the cross-pose overlay isn't cluttered by
+    # every replica of every pose.
+    subjobs = db.execute(
+        select(SubJob).where(SubJob.job_id == job_id, SubJob.replica_index == 1)
+        .order_by(SubJob.pose_index)
+    ).scalars().all()
     merged_data: list = []
     layout: dict = {}
     for sj in subjobs:
         fig = storage.read_json(
-            storage.pose_dir(job_id, sj.pose_index) / "analysis" / "plots" / f"{plot_type}.json"
+            storage.pose_dir(job_id, sj.pose_index, sj.replica_index) / "analysis" / "plots" / f"{plot_type}.json"
         )
         if not fig:
             continue

@@ -102,6 +102,7 @@ export function Upload() {
   const [name, setName] = useState("");
   const [ligandType, setLigandType] = useState<LigandType>("small_molecule");
   const [topN, setTopN] = useState(3);
+  const [nReplicas, setNReplicas] = useState(1);
   const [preset, setPreset] = useState<MdPreset>("standard");
   const [mdLengthNs, setMdLengthNs] = useState(50);
   const [boxType, setBoxType] = useState<BoxType>("dodecahedron");
@@ -220,11 +221,12 @@ export function Upload() {
         ligand_type: ligandType,
         ligand_chem_source: chemSourceForJob(),
         top_n_poses: topN,
+        n_replicas: nReplicas,
         md_length_ns: effectiveMdLength,
         md_preset: preset,
-        force_field: "amber14sb",
+        force_field: "ff19SB",
         ligand_force_field: "gaff2",
-        water_model: "tip3p",
+        water_model: "opc",
         box_type: boxType,
         salt_concentration: salt,
         temperature,
@@ -606,6 +608,28 @@ export function Upload() {
               />
               <p className="mt-1 text-xs text-slate-500">
                 Each selected pose runs as an independent MD sub-job.
+              </p>
+            </div>
+
+            <div>
+              <label className="label" htmlFor="n-replicas">
+                Replicas per pose
+              </label>
+              <input
+                id="n-replicas"
+                type="number"
+                min={1}
+                max={10}
+                step={1}
+                className="input"
+                value={nReplicas}
+                onChange={(e) =>
+                  setNReplicas(Math.max(1, Math.min(10, Math.floor(Number(e.target.value)) || 1)))
+                }
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                Independent MD repeats (different random seeds) per pose. &gt;1 reports
+                mean ± SEM of the binding score; multiplies compute by this factor.
               </p>
             </div>
 

@@ -192,6 +192,8 @@ class Job(Base):
     status: Mapped[str] = mapped_column(String(20), default=JobStatus.UPLOADED, nullable=False, index=True)
     md_length_ns: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
     top_n_poses: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    # Independent MD replicas per pose (different random velocity seeds), aggregated to mean ± SEM.
+    n_replicas: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     force_field: Mapped[str] = mapped_column(String(50), default="amber14sb", nullable=False)
     ligand_force_field: Mapped[str] = mapped_column(String(50), default="gaff2", nullable=False)
     ligand_chem_source: Mapped[str] = mapped_column(String(20), default=ChemSource.SDF, nullable=False)
@@ -214,6 +216,9 @@ class SubJob(Base):
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
     job_id: Mapped[str] = mapped_column(String(64), ForeignKey("jobs.id"), nullable=False, index=True)
     pose_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 1-based replica number within a pose (1 when a job has a single replica). Subjobs sharing a
+    # (job_id, pose_index) are independent MD replicas aggregated to mean ± SEM.
+    replica_index: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     docking_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default=JobStatus.QUEUED, nullable=False, index=True)
     assigned_gpu: Mapped[int | None] = mapped_column(Integer, nullable=True)

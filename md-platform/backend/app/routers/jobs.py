@@ -134,6 +134,7 @@ def get_job(
         job=JobOut.model_validate(job),
         subjobs=[SubJobOut.model_validate(s) for s in subjobs],
         logs=[JobLogOut.model_validate(l) for l in reversed(logs)],
+        replica_aggregates=jobs_service.pose_replica_aggregates(job, list(subjobs)),
     )
 
 

@@ -119,7 +119,7 @@ export function JobDetail() {
           if (data.log) {
             logs = [...logs, data.log].slice(-500);
           }
-          return { job, subjobs, logs };
+          return { ...prev, job, subjobs, logs };
         });
       },
       onError: () => {
@@ -209,8 +209,14 @@ export function JobDetail() {
   const anyFailed = subjobs.some((s) => s.status === "failed");
   const anyCompleted = subjobs.some((s) => s.status === "completed");
 
+  const multiReplica = (job.n_replicas ?? 1) > 1;
   const subjobColumns: Column<SubJob>[] = [
-    { key: "pose", header: "Pose", render: (s) => `#${s.pose_index}` },
+    {
+      key: "pose",
+      header: multiReplica ? "Pose · replica" : "Pose",
+      render: (s) =>
+        multiReplica ? `#${s.pose_index} · rep ${s.replica_index}` : `#${s.pose_index}`,
+    },
     {
       key: "score",
       header: "Docking score",
@@ -341,6 +347,7 @@ export function JobDetail() {
           <Meta label="Ligand type" value={titleCase(job.ligand_type)} />
           <Meta label="Chemistry source" value={job.ligand_chem_source.toUpperCase()} />
           <Meta label="Poses" value={String(job.top_n_poses)} />
+          <Meta label="Replicas / pose" value={String(job.n_replicas ?? 1)} />
           <Meta label="MD length" value={`${job.md_length_ns} ns`} />
           <Meta label="Protein FF" value={job.force_field} />
           <Meta label="Ligand FF" value={job.ligand_force_field} />
@@ -365,6 +372,54 @@ export function JobDetail() {
           empty="No sub-jobs."
         />
       </Card>
+
+      {/* Replica aggregate: mean ± SEM of the relative binding score across replicas */}
+      {multiReplica && (detail.replica_aggregates?.length ?? 0) > 0 && (
+        <Card title={`Replica aggregate (${job.n_replicas} replicas/pose)`}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs uppercase tracking-wide text-slate-500">
+                  <th className="py-1 pr-4">Pose</th>
+                  <th className="py-1 pr-4 text-right">MM/GBSA mean ± SEM</th>
+                  <th className="py-1 pr-4 text-right">Range (min…max)</th>
+                  <th className="py-1 pr-4 text-right">Occupancy mean</th>
+                  <th className="py-1 pr-4 text-right">n</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detail.replica_aggregates!.map((a) => (
+                  <tr key={a.pose_index} className="border-t border-slate-100">
+                    <td className="py-1 pr-4">#{a.pose_index}</td>
+                    <td className="py-1 pr-4 text-right tabular-nums">
+                      {a.gbsa.mean != null
+                        ? `${a.gbsa.mean.toFixed(2)} ± ${(a.gbsa.sem ?? 0).toFixed(2)} kcal/mol`
+                        : "—"}
+                    </td>
+                    <td className="py-1 pr-4 text-right tabular-nums text-slate-500">
+                      {a.gbsa.min != null && a.gbsa.max != null
+                        ? `${a.gbsa.min.toFixed(2)}…${a.gbsa.max.toFixed(2)}`
+                        : "—"}
+                    </td>
+                    <td className="py-1 pr-4 text-right tabular-nums">
+                      {a.pose_occupancy.mean != null
+                        ? `${(a.pose_occupancy.mean * 100).toFixed(0)}%`
+                        : "—"}
+                    </td>
+                    <td className="py-1 pr-4 text-right tabular-nums">
+                      {a.gbsa.n}/{a.n_replicas}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-2 text-xs text-slate-500">
+            Mean ± SEM across independent MD replicas (n = replicas, not frames). SEM = SD/√n;
+            a single completed replica shows ± 0.00. Relative ranking score, not an absolute ΔG/Kd.
+          </p>
+        </Card>
+      )}
 
       {/* Logs */}
       <Card

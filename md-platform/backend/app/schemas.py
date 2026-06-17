@@ -135,11 +135,14 @@ class JobCreate(BaseModel):
     ] = "small_molecule"
     ligand_chem_source: Literal["sdf", "mol2", "smiles", "meeko", "manual"] = "sdf"
     top_n_poses: int = Field(default=3, ge=1, le=50)
+    # Independent MD replicas per pose (different random velocity seeds). Each replica runs the
+    # full pipeline as its own subjob; results are aggregated to mean ± SEM across replicas.
+    n_replicas: int = Field(default=1, ge=1, le=10)
     md_length_ns: int = Field(default=50, ge=1, le=10000)
     md_preset: Literal["quick", "standard", "extended", "custom"] = "standard"
-    force_field: str = "amber14sb"
+    force_field: str = "ff19SB"
     ligand_force_field: str = "gaff2"
-    water_model: str = "tip3p"
+    water_model: str = "opc"
     box_type: Literal["dodecahedron", "cubic"] = "dodecahedron"
     salt_concentration: float = 0.15
     temperature: float = 300.0
@@ -161,6 +164,7 @@ class JobOut(BaseModel):
     status: str
     md_length_ns: int
     top_n_poses: int
+    n_replicas: int = 1
     force_field: str
     ligand_force_field: str
     ligand_chem_source: str
@@ -183,6 +187,7 @@ class SubJobOut(BaseModel):
     id: str
     job_id: str
     pose_index: int
+    replica_index: int = 1
     docking_score: float
     status: str
     assigned_gpu: int | None = None
@@ -208,10 +213,45 @@ class JobLogOut(BaseModel):
     created_at: datetime
 
 
+class ReplicaStat(BaseModel):
+    """Summary statistics across MD replicas of one pose (n samples = n replicas, NOT frames)."""
+
+    n: int = 0
+    mean: float | None = None
+    sem: float | None = None      # standard error of the mean = std / sqrt(n)
+    std: float | None = None      # sample standard deviation (n-1)
+    min: float | None = None
+    max: float | None = None
+
+
+class ReplicaResult(BaseModel):
+    """One replica's binding numbers (None until that replica's MM/GBSA is available)."""
+
+    replica_index: int
+    subjob_id: str
+    status: str
+    gbsa_dg_kcal_mol: float | None = None
+    pbsa_dg_kcal_mol: float | None = None
+    pose_occupancy: float | None = None
+
+
+class PoseReplicaAggregate(BaseModel):
+    """Per-pose aggregate over its replicas: mean ± SEM of the relative binding score + occupancy."""
+
+    pose_index: int
+    n_replicas: int
+    gbsa: ReplicaStat
+    pbsa: ReplicaStat
+    pose_occupancy: ReplicaStat
+    replicas: list[ReplicaResult]
+
+
 class JobDetail(BaseModel):
     job: JobOut
     subjobs: list[SubJobOut]
     logs: list[JobLogOut]
+    # Populated only for multi-replica jobs; mean ± SEM of the binding score across replicas.
+    replica_aggregates: list[PoseReplicaAggregate] = []
 
 
 # ---------------------------------------------------------------------------

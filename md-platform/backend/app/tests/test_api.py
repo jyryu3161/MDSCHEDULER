@@ -287,6 +287,46 @@ def test_create_job_succeeds_with_sdf(client, admin_token):
     assert len(res.json()["subjobs"]) == 3
 
 
+def test_create_job_fans_out_replicas(client, admin_token):
+    upload = _upload(client, admin_token, with_chem=True)
+    resp = client.post(
+        "/api/jobs",
+        headers=_auth(admin_token),
+        json={
+            "upload_id": upload["upload_id"],
+            "name": "replicas",
+            "ligand_type": "small_molecule",
+            "ligand_chem_source": "sdf",
+            "top_n_poses": 2,
+            "n_replicas": 2,
+            "md_preset": "standard",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    job = resp.json()
+    assert job["n_replicas"] == 2
+    job_id = job["id"]
+
+    detail = client.get(f"/api/jobs/{job_id}", headers=_auth(admin_token)).json()
+    # 2 poses × 2 replicas = 4 distinct subjobs.
+    assert len(detail["subjobs"]) == 4
+    ids = {sj["id"] for sj in detail["subjobs"]}
+    assert len(ids) == 4
+    # Both poses present; replica 1 keeps the canonical id, replica 2 gets the _rep_02 suffix.
+    assert ids == {
+        f"{job_id}_pose_01", f"{job_id}_pose_01_rep_02",
+        f"{job_id}_pose_02", f"{job_id}_pose_02_rep_02",
+    }
+    by_pose: dict[int, set[int]] = {}
+    for sj in detail["subjobs"]:
+        by_pose.setdefault(sj["pose_index"], set()).add(sj["replica_index"])
+    assert set(by_pose) == {1, 2}
+    assert all(reps == {1, 2} for reps in by_pose.values())
+
+    # replica_aggregates is present (entries appear once MM/GBSA exists; the structure is there).
+    assert "replica_aggregates" in detail
+
+
 def test_create_job_unknown_upload(client, admin_token):
     resp = client.post(
         "/api/jobs",
