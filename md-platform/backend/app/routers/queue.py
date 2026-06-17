@@ -8,28 +8,30 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user, require_admin
-from ..models import Job, JobStatus, Priority, SubJob, User
+from ..models import Job, JobStatus, Priority, Role, SubJob, User
 from ..schemas import JobOut, PriorityUpdate, QueueItem, QueueResponse
 
 router = APIRouter(prefix="/queue", tags=["queue"])
 
 
-def build_queue_snapshot(db: Session) -> QueueResponse:
+def build_queue_snapshot(db: Session, viewer_id: int | None = None, is_admin: bool = False) -> QueueResponse:
     """Assemble the queue snapshot: pending (queued) and running subjobs.
 
-    Ordering mirrors scheduling intent: queued items by job priority then creation
-    time then pose index; running items by assigned GPU. ETA is a rough estimate
-    from measured ns/day when available.
+    Scoped to the viewer's own jobs for non-admins (so the queue doesn't expose other users' job
+    names / usernames); admins (and unscoped internal callers) see the whole queue. Ordering
+    mirrors scheduling intent: queued items by job priority then creation time then pose index;
+    running items by assigned GPU. ETA is a rough estimate from measured ns/day when available.
     """
-    rows = (
-        db.execute(
-            select(SubJob, Job, User)
-            .join(Job, SubJob.job_id == Job.id)
-            .join(User, Job.user_id == User.id)
-            .where(SubJob.status.notin_(JobStatus.TERMINAL_SET))
-        )
-        .all()
+    scope_uid = viewer_id if (viewer_id is not None and not is_admin) else None
+    q = (
+        select(SubJob, Job, User)
+        .join(Job, SubJob.job_id == Job.id)
+        .join(User, Job.user_id == User.id)
+        .where(SubJob.status.notin_(JobStatus.TERMINAL_SET))
     )
+    if scope_uid is not None:
+        q = q.where(Job.user_id == scope_uid)
+    rows = db.execute(q).all()
 
     pending: list[tuple] = []
     running: list[tuple] = []
@@ -77,9 +79,9 @@ def _eta_seconds(sj: SubJob, job: Job) -> float | None:
 @router.get("", response_model=QueueResponse)
 def get_queue(
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ) -> QueueResponse:
-    return build_queue_snapshot(db)
+    return build_queue_snapshot(db, viewer_id=user.id, is_admin=(user.role == Role.ADMIN))
 
 
 @router.post("/{job_id}/priority", response_model=JobOut)

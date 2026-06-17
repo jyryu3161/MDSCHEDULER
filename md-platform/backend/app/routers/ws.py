@@ -42,9 +42,9 @@ def _authenticate(token: str | None) -> tuple[int, str] | None:
         return (user.id, user.role)
 
 
-def _dashboard_payload() -> dict:
+def _dashboard_payload(viewer_id: int | None = None, is_admin: bool = False) -> dict:
     with session_scope() as s:
-        summary = build_summary(s).model_dump()
+        summary = build_summary(s, viewer_id=viewer_id, is_admin=is_admin).model_dump()
         gpus = gpu_manager.list_gpus(s)
         gpu_payload = [
             {
@@ -59,7 +59,7 @@ def _dashboard_payload() -> dict:
             }
             for g in gpus
         ]
-        queue = build_queue_snapshot(s).model_dump()
+        queue = build_queue_snapshot(s, viewer_id=viewer_id, is_admin=is_admin).model_dump()
     return {"event": "dashboard", "summary": summary, "gpus": gpu_payload, "queue": queue}
 
 
@@ -97,10 +97,12 @@ async def ws_dashboard(websocket: WebSocket, token: str | None = Query(default=N
     if auth is None:
         await websocket.close(code=4401)
         return
+    user_id, role = auth
+    is_admin = role == Role.ADMIN
     await websocket.accept()
     q = await bus.subscribe(dashboard_topic())
     try:
-        await websocket.send_json(_dashboard_payload())
+        await websocket.send_json(_dashboard_payload(viewer_id=user_id, is_admin=is_admin))
         while True:
             try:
                 await asyncio.wait_for(q.get(), timeout=3.0)
@@ -108,7 +110,7 @@ async def ws_dashboard(websocket: WebSocket, token: str | None = Query(default=N
                 pass
             if websocket.application_state != WebSocketState.CONNECTED:
                 break
-            await websocket.send_json(_dashboard_payload())
+            await websocket.send_json(_dashboard_payload(viewer_id=user_id, is_admin=is_admin))
     except WebSocketDisconnect:
         pass
     finally:

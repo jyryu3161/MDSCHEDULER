@@ -68,12 +68,15 @@ def client():
 
 @pytest.fixture(scope="module")
 def admin_token(client) -> str:
-    resp = client.post("/api/auth/login", json={"username": "csbl", "password": "csbl"})
+    # The server now blocks protected endpoints while must_change_password is set (forced-change),
+    # so the seeded csbl admin's first-login token is NOT usable for the API tests. Create a
+    # password-ready admin for those; csbl is left untouched for the auth-flow tests below.
+    _create_user("apiadmin", "apipass-1", role="admin", must_change=False)
+    resp = client.post("/api/auth/login", json={"username": "apiadmin", "password": "apipass-1"})
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["token_type"] == "bearer"
-    # Seeded admin must be flagged for password change.
-    assert body["must_change_password"] is True
+    assert body["must_change_password"] is False
     assert body["role"] == "admin"
     return body["access_token"]
 
@@ -92,17 +95,42 @@ def test_login_bad_credentials(client):
     assert resp.status_code == 401
 
 
-def test_me_reports_must_change_password(client, admin_token):
-    me = client.get("/api/auth/me", headers=_auth(admin_token))
+def test_me_reports_must_change_password(client):
+    # The seeded csbl admin starts flagged for a forced password change. /auth/me is exempt from
+    # the enforcement gate (it's one of the endpoints needed to complete the change), so it stays
+    # reachable and reports the flag.
+    login = client.post("/api/auth/login", json={"username": "csbl", "password": "csbl"})
+    assert login.status_code == 200 and login.json()["must_change_password"] is True
+    me = client.get("/api/auth/me", headers=_auth(login.json()["access_token"]))
     assert me.status_code == 200
     assert me.json()["username"] == "csbl"
-    # Seeded admin starts flagged for a forced password change.
     assert me.json()["must_change_password"] is True
 
 
-def _create_user(username: str, password: str, role: str = "user") -> None:
+def test_must_change_password_blocks_api_until_changed(client):
+    # Server-side enforcement (not just the UI modal): a forced-change account can reach only the
+    # password-change-flow endpoints; everything else is 403 until the password is changed.
+    _create_user("pwlock", "initpass1", role="user", must_change=True)
+    tok = client.post("/api/auth/login", json={"username": "pwlock", "password": "initpass1"}).json()["access_token"]
+    h = _auth(tok)
+    # Protected endpoints are blocked...
+    assert client.get("/api/jobs", headers=h).status_code == 403
+    assert client.get("/api/queue", headers=h).status_code == 403
+    assert client.get("/api/dashboard/summary", headers=h).status_code == 403
+    # ...but the change-password flow (me + change-password) is reachable.
+    assert client.get("/api/auth/me", headers=h).status_code == 200
+    cp = client.post("/api/auth/change-password", headers=h,
+                     json={"old_password": "initpass1", "new_password": "newpass-99"})
+    assert cp.status_code == 200, cp.text
+    # After changing, a fresh token is fully usable.
+    tok2 = client.post("/api/auth/login", json={"username": "pwlock", "password": "newpass-99"}).json()["access_token"]
+    assert client.get("/api/jobs", headers=_auth(tok2)).status_code == 200
+
+
+def _create_user(username: str, password: str, role: str = "user", must_change: bool = True) -> None:
     """Insert a fresh user directly so the change-password test does not mutate the
-    shared seeded admin (keeping tests order-independent)."""
+    shared seeded admin (keeping tests order-independent). ``must_change`` controls the
+    forced-password-change flag (default True; pass False for a ready-to-use account)."""
     from app.database import session_scope
     from app.models import User
     from app.security import hash_password
@@ -114,7 +142,7 @@ def _create_user(username: str, password: str, role: str = "user") -> None:
                 password_hash=hash_password(password),
                 role=role,
                 is_active=True,
-                must_change_password=True,
+                must_change_password=must_change,
             )
         )
         s.commit()

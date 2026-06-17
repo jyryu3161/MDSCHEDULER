@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user_allow_password_change
 from ..models import User
 from ..schemas import (
     ChangePasswordRequest,
@@ -133,7 +133,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)) -> LoginResponse:
 
 
 @router.post("/logout", response_model=OkResponse)
-def logout(_user: User = Depends(get_current_user)) -> OkResponse:
+def logout(_user: User = Depends(get_current_user_allow_password_change)) -> OkResponse:
     # Stateless JWT: the client discards the token. Endpoint exists for symmetry.
     return OkResponse(ok=True)
 
@@ -142,7 +142,7 @@ def logout(_user: User = Depends(get_current_user)) -> OkResponse:
 def change_password(
     body: ChangePasswordRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_allow_password_change),
 ) -> OkResponse:
     if not verify_password(body.old_password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect.")
@@ -161,5 +161,5 @@ def change_password(
 
 
 @router.get("/me", response_model=UserMe)
-def me(user: User = Depends(get_current_user)) -> UserMe:
+def me(user: User = Depends(get_current_user_allow_password_change)) -> UserMe:
     return UserMe.model_validate(user)

@@ -58,13 +58,17 @@ async def dashboard_events(
     token: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    _user_from_token(_resolve_token(request, token), db)
+    viewer = _user_from_token(_resolve_token(request, token), db)
+    # Capture as primitives so the streaming closure doesn't touch a detached ORM object after the
+    # request session closes. Job counts + queue are scoped to this viewer (admins see global).
+    viewer_id = viewer.id
+    is_admin = viewer.role == Role.ADMIN
 
     def snapshot() -> dict:
         # Each tick uses its own short-lived session (the request session is closed
         # once the generator starts streaming).
         with session_scope() as s:
-            summary = build_summary(s).model_dump()
+            summary = build_summary(s, viewer_id=viewer_id, is_admin=is_admin).model_dump()
             gpus = [g_.__dict__ for g_ in gpu_manager.list_gpus(s)]
             gpu_payload = [
                 {
@@ -79,7 +83,7 @@ async def dashboard_events(
                 }
                 for g in gpus
             ]
-            queue = build_queue_snapshot(s).model_dump()
+            queue = build_queue_snapshot(s, viewer_id=viewer_id, is_admin=is_admin).model_dump()
         return {"summary": summary, "gpus": gpu_payload, "queue": queue}
 
     return EventSourceResponse(sse_dashboard_stream(snapshot))

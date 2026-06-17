@@ -19,11 +19,12 @@ def get_app_settings() -> Settings:
     return get_settings()
 
 
-def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
-    db: Session = Depends(get_db),
+def _authenticate(
+    credentials: HTTPAuthorizationCredentials | None,
+    db: Session,
 ) -> User:
-    """Resolve the authenticated user from the Bearer JWT, or 401."""
+    """Resolve the authenticated user from the Bearer JWT, or 401. Does NOT enforce the
+    must-change-password gate (see get_current_user vs get_current_user_allow_password_change)."""
     if credentials is None or not credentials.credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -48,6 +49,32 @@ def get_current_user(
     user = db.get(User, uid_int)
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive.")
+    return user
+
+
+def get_current_user_allow_password_change(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    db: Session = Depends(get_db),
+) -> User:
+    """Authenticated user WITHOUT the must-change-password gate. Use ONLY for the endpoints a
+    user must reach while their password change is still pending: change-password, me, logout."""
+    return _authenticate(credentials, db)
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    db: Session = Depends(get_db),
+) -> User:
+    """Authenticated user for all protected endpoints. Default-deny: if the account still has a
+    pending forced password change, every protected endpoint is blocked with 403 (the UI modal is
+    only a convenience — this is the server-side enforcement). The three password-change-flow
+    endpoints opt out via get_current_user_allow_password_change."""
+    user = _authenticate(credentials, db)
+    if user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password change required before using the API.",
+        )
     return user
 
 

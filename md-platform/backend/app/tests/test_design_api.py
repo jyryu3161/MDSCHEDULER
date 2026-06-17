@@ -39,9 +39,20 @@ def _no_enqueue(monkeypatch):
 
 
 def _auth(client):
-    # Login returns a usable token even while must_change_password is set (see test_api), so the
-    # design API tests don't need to mutate the seeded admin's password.
-    r = client.post("/api/auth/login", json={"username": "csbl", "password": "csbl"})
+    # The server now blocks protected endpoints while must_change_password is set, so the seeded
+    # csbl admin's first-login token is not usable. Use a password-ready admin instead (idempotent
+    # for the module's shared DB); admin role so the admin-sees-all scoping test holds.
+    from app.models import User
+    from app.security import hash_password
+    db = SessionLocal()
+    try:
+        if db.query(User).filter(User.username == "apiadmin").first() is None:
+            db.add(User(username="apiadmin", password_hash=hash_password("apipass-1"),
+                        role="admin", is_active=True, must_change_password=False))
+            db.commit()
+    finally:
+        db.close()
+    r = client.post("/api/auth/login", json={"username": "apiadmin", "password": "apipass-1"})
     assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
