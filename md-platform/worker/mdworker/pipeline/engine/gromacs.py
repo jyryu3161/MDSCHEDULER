@@ -75,6 +75,31 @@ _STEPS_PER_NS = 500000
 # OPC, TIP4P-D, etc. live ONLY in a force field's watermodels.dat, so they must be confirmed there.
 _BUILTIN_WATER = {"tip3p", "spc", "spce", "tip4p", "tip4pew", "tip5p"}
 
+# Pre-equilibrated solvent boxes (ship in $GMXLIB) by water-model SITE COUNT. `gmx solvate -cs`
+# must use a box whose atoms-per-water matches the model's topology, or grompp aborts with a
+# coordinate/topology count mismatch: 4-point models (OPC, TIP4P/-Ew) carry a virtual M-site, so
+# they need tip4p.gro (4 atoms/water), not the 3-point spc216.gro. 5-point -> tip5p.gro.
+_WATER_BOX_4POINT = {"opc", "tip4p", "tip4pew", "tip4p-d", "tip4pd"}
+_WATER_BOX_5POINT = {"tip5p", "tip5pe"}
+
+
+def _solvent_box(water_model: str) -> str:
+    """gmx solvate -cs box file matching the water model's site count (default 3-point spc216)."""
+    w = (water_model or "").strip().lower()
+    if w in _WATER_BOX_4POINT:
+        return "tip4p.gro"
+    if w in _WATER_BOX_5POINT:
+        return "tip5p.gro"
+    return "spc216.gro"
+
+
+def _water_has_vsites(water_model: str) -> bool:
+    """True for water models with a virtual site (4-/5-point: OPC, TIP4P/-Ew, TIP5P). GROMACS
+    cannot run GPU-resident update (`gmx mdrun -update gpu`) when the system has virtual sites, so
+    those models keep nonbonded on the GPU but run the integration update on the CPU."""
+    w = (water_model or "").strip().lower()
+    return w in _WATER_BOX_4POINT or w in _WATER_BOX_5POINT
+
 
 def _ff_top_dirs(gmx_path: Optional[str], extra: Optional[Path] = None) -> List[Path]:
     """Directories GROMACS searches for ``<ff>.ff`` force-field folders, best-effort.
@@ -491,9 +516,15 @@ class GromacsEngine(MDEngine):
     ) -> MDResult:
         run = ctx.md_dir
         env = os.environ.copy()
+        gpu_args: List[str] = []
         if assigned_gpu is not None:
             env["CUDA_VISIBLE_DEVICES"] = str(assigned_gpu)
-        gpu_args = ["-nb", "gpu", "-update", "gpu"] if assigned_gpu is not None else []
+            gpu_args = ["-nb", "gpu"]
+            # GPU-resident update (-update gpu) is unsupported with virtual sites, which 4-/5-point
+            # water models (OPC, TIP4P/-Ew, TIP5P) introduce; keep nonbonded on the GPU but update
+            # on the CPU for those, otherwise mdrun aborts ("Virtual sites are not supported").
+            if not _water_has_vsites(self._resolved_water or self.settings.water_model):
+                gpu_args += ["-update", "gpu"]
 
         # Assemble complex coords + topology (port of assemble_complex.py).
         self._assemble(ctx, prepared, ligand, ligand_pdb, run)
@@ -502,11 +533,16 @@ class GromacsEngine(MDEngine):
         self._render_mdp("ions.mdp", run / "ions.mdp")
         box_type = self.settings.extra.get("box_type", "dodecahedron")
         box_pad = str(self.settings.box_padding_nm)
+        # The solvent box template MUST match the water model's site count: a 4-point model (OPC,
+        # TIP4P/-Ew) has a virtual M-site, so solvating from the 3-point spc216.gro yields a
+        # solv.gro with 3 atoms/water while the topology expects 4 -> grompp aborts with a
+        # coordinate/topology count mismatch. Pick the matching pre-equilibrated box.
+        solvent_box = _solvent_box(self._resolved_water or self.settings.water_model)
         self._run(ctx, "preparing",
                   [self._gmx, "editconf", "-f", "complex.gro", "-o", "boxed.gro",
                    "-bt", box_type, "-d", box_pad, "-c"], cwd=run)
         self._run(ctx, "preparing",
-                  [self._gmx, "solvate", "-cp", "boxed.gro", "-cs", "spc216.gro",
+                  [self._gmx, "solvate", "-cp", "boxed.gro", "-cs", solvent_box,
                    "-o", "solv.gro", "-p", "topol.top"], cwd=run)
         self._run(ctx, "preparing",
                   [self._gmx, "grompp", "-f", "ions.mdp", "-c", "solv.gro",

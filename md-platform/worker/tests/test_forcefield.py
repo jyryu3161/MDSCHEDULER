@@ -13,7 +13,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mdworker.config import Settings
-from mdworker.pipeline.engine.gromacs import GromacsEngine, _ff_top_dirs, _ff_water_available
+from mdworker.pipeline.engine.gromacs import (
+    GromacsEngine, _ff_top_dirs, _ff_water_available, _solvent_box, _water_has_vsites)
 from mdworker.pipeline.steps.mmpbsa import _protein_leaprc
 
 
@@ -190,6 +191,29 @@ def test_config_env_overrides(monkeypatch):
 
 
 # ── MM/GBSA leaprc mapping ───────────────────────────────────────────────────
+# ── solvent box selection by water-model site count ──────────────────────────
+@pytest.mark.parametrize("water,box", [
+    ("tip3p", "spc216.gro"), ("spc", "spc216.gro"), ("spce", "spc216.gro"),
+    ("opc3", "spc216.gro"),                    # OPC3 is a 3-point model
+    ("opc", "tip4p.gro"), ("OPC", "tip4p.gro"),  # 4-point -> must NOT use spc216 (the real bug)
+    ("tip4p", "tip4p.gro"), ("tip4pew", "tip4p.gro"),
+    ("tip5p", "tip5p.gro"),
+    ("", "spc216.gro"),                        # default
+])
+def test_solvent_box_matches_water_site_count(water, box):
+    assert _solvent_box(water) == box
+
+
+@pytest.mark.parametrize("water,vsites", [
+    ("tip3p", False), ("spc", False), ("spce", False), ("opc3", False),
+    ("opc", True), ("OPC", True), ("tip4p", True), ("tip4pew", True), ("tip5p", True),
+    ("", False),
+])
+def test_water_has_vsites(water, vsites):
+    # 4-/5-point water has a virtual site -> mdrun must NOT use `-update gpu`.
+    assert _water_has_vsites(water) is vsites
+
+
 @pytest.mark.parametrize("name,expected", [
     ("ff19SB", "leaprc.protein.ff19SB"),
     ("amber14sb", "oldff/leaprc.ff14SB"),
