@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { normalizeError, resultsApi } from "../api";
 import { Card, EmptyState, ErrorBanner, Spinner } from "../components/ui";
 import { DataTable, type Column } from "../components/DataTable";
 import { JobStatusBadge } from "../components/StatusBadge";
-import { PlotlyChart } from "../components/PlotlyChart";
-import { TrajectoryViewer } from "../components/TrajectoryViewer";
+// Plotly (~4.8 MB) and NGL (~1.3 MB) are by far the heaviest deps and are only needed on this
+// results view, so they are code-split out of the main bundle and loaded on demand here.
+const PlotlyChart = lazy(() =>
+  import("../components/PlotlyChart").then((m) => ({ default: m.PlotlyChart })));
+const TrajectoryViewer = lazy(() =>
+  import("../components/TrajectoryViewer").then((m) => ({ default: m.TrajectoryViewer })));
 import { formatScore, titleCase } from "../format";
 import { PLOT_TYPES } from "../types";
 import type {
@@ -477,7 +481,9 @@ function PoseResults({
           Trajectory
         </h3>
         {subjob.has_trajectory ? (
-          <TrajectoryViewer jobId={jobId} subjobId={subjob.id} />
+          <Suspense fallback={<Spinner label="Loading 3D viewer…" />}>
+            <TrajectoryViewer jobId={jobId} subjobId={subjob.id} />
+          </Suspense>
         ) : (
           <EmptyState>No trajectory file is available for this pose.</EmptyState>
         )}
@@ -562,7 +568,9 @@ function PlotPanel({
       {error ? (
         <ErrorBanner message={error} />
       ) : figure ? (
-        <PlotlyChart figure={figure} />
+        <Suspense fallback={<div className="flex h-40 items-center justify-center"><Spinner label="Loading chart…" /></div>}>
+          <PlotlyChart figure={figure} />
+        </Suspense>
       ) : (
         <div className="flex h-40 items-center justify-center">
           <Spinner label="Loading chart…" />
@@ -708,7 +716,9 @@ function OverlayPlotPanel({
       {error ? (
         <ErrorBanner message={error} />
       ) : figure ? (
-        <PlotlyChart figure={figure} />
+        <Suspense fallback={<div className="flex h-40 items-center justify-center"><Spinner label="Loading chart…" /></div>}>
+          <PlotlyChart figure={figure} />
+        </Suspense>
       ) : (
         <div className="flex h-40 items-center justify-center">
           <Spinner label="Loading chart…" />

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { designApi, normalizeError } from "../api";
@@ -8,12 +8,15 @@ import {
   EmptyState,
   ErrorBanner,
   JobStatusBadge,
-  PlotlyChart,
   ProgressBar,
   Spinner,
   StatCard,
   type Column,
 } from "../components";
+// Plotly is heavy (~4.8 MB) and only used for the convergence chart here, so it is code-split
+// out of the main bundle and loaded on demand (imported directly, not via the eager barrel).
+const PlotlyChart = lazy(() =>
+  import("../components/PlotlyChart").then((m) => ({ default: m.PlotlyChart })));
 import type { DesignCandidate, DesignJobDetail, PlotlyFigure } from "../types";
 
 const POLL_MS = 4000;
@@ -171,8 +174,13 @@ export function DesignDetail() {
       </div>
 
       <Card title="Convergence (best-so-far per generation)">
-        {figure ? <PlotlyChart figure={figure} height={320} /> :
-          <EmptyState>No generations recorded yet.</EmptyState>}
+        {figure ? (
+          <Suspense fallback={<Spinner label="Loading chart…" />}>
+            <PlotlyChart figure={figure} height={320} />
+          </Suspense>
+        ) : (
+          <EmptyState>No generations recorded yet.</EmptyState>
+        )}
       </Card>
 
       <Card title="Candidate leaderboard">
