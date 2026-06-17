@@ -152,20 +152,46 @@ def _normalize_inputs(job_meta: Dict[str, Any], job_dir: Path) -> Dict[str, Any]
     return job_meta
 
 
-def _acquire_gpu(ctx: JobContext, *, use_gpu: bool, retries: int, wait_s: float) -> Optional[int]:
+def _acquire_gpu(ctx: JobContext, *, use_gpu: bool, retries: int, wait_s: float,
+                 require_lock: bool = False, max_wait_s: float = 7200.0) -> Optional[int]:
+    """Claim a GPU slot, or return None to run lock-free.
+
+    ``require_lock`` (set for a real GROMACS + use_gpu job) changes the no-slot behavior: instead
+    of proceeding WITHOUT a lock — which would run real MD on the CPU (extremely slow) or on an
+    unlocked, possibly over-subscribed GPU — the subjob WAITS in the queue for a slot to free,
+    polling for cancellation so the user can still abort. It waits up to ``max_wait_s`` (a safety
+    cap so a permanently-drained pool surfaces an error instead of hanging forever), then fails.
+    The mock engine (require_lock False) keeps the cheap lock-free CPU fallback after ``retries``.
+    """
     if not use_gpu:
         ctx.info("gpu", "GPU disabled for this job; running on CPU.")
         return None
-    for attempt in range(max(1, retries)):
+    attempt = 0
+    waited = 0.0
+    while True:
         gpu = ctx.request_gpu()
         if gpu is not None:
             ctx.info("gpu", f"Acquired GPU {gpu} for subjob.")
             return gpu
-        if attempt < retries - 1:
+        ctx.check_cancelled()  # let a queued subjob abort promptly on user/admin cancel
+        attempt += 1
+        if not require_lock:
+            if attempt >= max(1, retries):
+                ctx.warning("gpu", "No GPU available after waiting; proceeding without a GPU lock "
+                                   "(mock engine runs on CPU).")
+                return None
             time.sleep(wait_s)
-    ctx.warning("gpu", "No GPU available after waiting; proceeding without a GPU lock "
-                       "(the mock engine runs on CPU; a real GROMACS run will be slow).")
-    return None
+            continue
+        # require_lock: keep queuing for a real GPU slot rather than running un-locked.
+        if waited >= max_wait_s:
+            raise RuntimeError(
+                f"No GPU slot became available within {max_wait_s:.0f}s; refusing to run real "
+                "GROMACS without a GPU lock. Free or enable a GPU in the MD pool, or lower "
+                "MD concurrency, then retry.")
+        if attempt == 1 or attempt % 15 == 0:
+            ctx.info("gpu", f"Waiting for a free GPU slot (queued {waited:.0f}s)…")
+        time.sleep(wait_s)
+        waited += wait_s
 
 
 def run_subjob(subjob_id: str, *, reporter, settings) -> Dict[str, Any]:
@@ -216,7 +242,11 @@ def run_subjob(subjob_id: str, *, reporter, settings) -> Dict[str, Any]:
                        f"engine={settings.resolved_engine}, md={job_meta.get('md_length_ns')} ns).")
 
     try:
-        assigned_gpu = _acquire_gpu(ctx, use_gpu=use_gpu, retries=15, wait_s=4.0)
+        # Real GROMACS + use_gpu must hold a GPU lock (no lock-free CPU/oversubscribed fallback):
+        # queue for a slot instead. The mock engine keeps the quick lock-free fallback.
+        require_lock = settings.resolved_engine == "gromacs" and use_gpu
+        assigned_gpu = _acquire_gpu(ctx, use_gpu=use_gpu, retries=15, wait_s=4.0,
+                                    require_lock=require_lock)
         ctx.subjob_meta["assigned_gpu"] = assigned_gpu
         if assigned_gpu is not None:
             reporter.set_subjob_status(subjob_id, assigned_gpu=assigned_gpu)
