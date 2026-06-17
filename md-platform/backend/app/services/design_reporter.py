@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Callable, List
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from .. import realtime
@@ -38,17 +38,27 @@ class DesignReporter:
             dj = db.get(DesignJob, design_id)
             if dj is None:
                 return
-            dj.status = status
+            # Always-safe fields (telemetry), applied regardless of terminal state.
             if error_message is not None:
                 dj.error_message = error_message
             if current_generation is not None:
                 dj.current_generation = current_generation
-            if status in JobStatus.RUNNING_SET and dj.started_at is None:
-                dj.started_at = utcnow()
-            if status in JobStatus.TERMINAL_SET:
-                dj.completed_at = utcnow()
-                if status == JobStatus.COMPLETED:
-                    dj.progress = 100.0
+            # Resurrection guard via compare-and-swap: never overwrite a terminal design job — e.g.
+            # one the user cancelled — with a late status from the runner finishing its current
+            # generation. The status (and its terminal/running side-effects) apply ONLY when the
+            # CAS actually transitions a non-terminal row.
+            res = db.execute(
+                update(DesignJob)
+                .where(DesignJob.id == design_id, DesignJob.status.notin_(JobStatus.TERMINAL_SET))
+                .values(status=status)
+            )
+            if (res.rowcount or 0) > 0:
+                if status in JobStatus.RUNNING_SET and dj.started_at is None:
+                    dj.started_at = utcnow()
+                if status in JobStatus.TERMINAL_SET:
+                    dj.completed_at = utcnow()
+                    if status == JobStatus.COMPLETED:
+                        dj.progress = 100.0
             db.commit()
         finally:
             db.close()
@@ -69,22 +79,29 @@ class DesignReporter:
         self._publish(design_id)
 
     def record_candidates(self, design_id: str, rows: List[dict]) -> None:
-        """Upsert candidates by (design_job_id, sequence): insert new, update ΔG/fitness/refined."""
+        """Upsert candidates keyed by (design_job_id, sequence, generation): insert new, update
+        ΔG/fitness/refined.
+
+        Keyed by (sequence, generation) — NOT sequence alone — so a sequence re-evaluated in a
+        later generation gets its OWN row instead of overwriting the earlier generation's. This
+        preserves per-generation history, which the convergence curve (best-so-far per generation)
+        depends on; keying by sequence alone collapsed all generations of a recurring sequence
+        into one row and corrupted that curve."""
         db = self._session_factory()
         try:
             existing = {
-                c.sequence: c for c in db.execute(
+                (c.sequence, c.generation): c for c in db.execute(
                     select(DesignCandidate).where(DesignCandidate.design_job_id == design_id)
                 ).scalars()
             }
             for r in rows:
                 seq = r["sequence"]
-                c = existing.get(seq)
+                gen = int(r.get("generation", 0))
+                c = existing.get((seq, gen))
                 if c is None:
-                    c = DesignCandidate(design_job_id=design_id, sequence=seq,
-                                        generation=int(r.get("generation", 0)))
+                    c = DesignCandidate(design_job_id=design_id, sequence=seq, generation=gen)
                     db.add(c)
-                    existing[seq] = c
+                    existing[(seq, gen)] = c
                 c.docking_score = r.get("docking_score")
                 c.md_dg = r.get("md_dg")
                 c.fitness = float(r.get("fitness", 0.0) or 0.0)

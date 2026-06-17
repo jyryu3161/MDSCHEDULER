@@ -21,6 +21,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Callable
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from .. import realtime
@@ -133,8 +134,9 @@ class DbReporter:
             sub = db.get(SubJob, subjob_id)
             if sub is None:
                 return
-            if status is not None:
-                sub.status = status
+            job_id = sub.job_id
+            # Telemetry/metric fields are always applied (even on an already-terminal subjob) so
+            # late worker reports aren't lost.
             if current_step is not None:
                 sub.current_step = current_step
             if progress is not None:
@@ -153,13 +155,24 @@ class DbReporter:
                 sub.completed_at = _as_dt(completed_at)
             if result_path is not None:
                 sub.result_path = result_path
-            job_id = sub.job_id
+            # Resurrection guard (mirrors routers/internal.py): once a subjob is terminal — e.g.
+            # cancelled by the user — that decision is authoritative. Apply the status as a guarded
+            # compare-and-swap (UPDATE ... WHERE status NOT IN terminal), matching the cancel
+            # path's CAS, so a worker that read the row as non-terminal a moment ago can't clobber
+            # a concurrent cancel.
+            if status is not None:
+                db.execute(
+                    update(SubJob)
+                    .where(SubJob.id == subjob_id, SubJob.status.notin_(JobStatus.TERMINAL_SET))
+                    .values(status=status)
+                )
             db.commit()
-            # When a subjob reaches a terminal state, finalize the parent job if ALL its
-            # subjobs are now terminal. This is the single finalization point for BOTH the
-            # in-process executor (DbReporter used directly) and the rq path (the internal
-            # router delegates here), so a job's status reliably flips to completed/failed.
-            if status in JobStatus.TERMINAL_SET:
+            db.refresh(sub)
+            # When a subjob reaches a terminal state, finalize the parent job if ALL its subjobs
+            # are now terminal. Keyed on the EFFECTIVE (post-CAS) status, so a blocked resurrection
+            # doesn't trigger a spurious re-finalize, and a genuine terminal transition still does.
+            # Single finalization point for both the in-process executor and the rq path.
+            if sub.status in JobStatus.TERMINAL_SET:
                 self._maybe_finalize_job(db, job_id)
             self._publish_job(db, job_id)
         finally:
