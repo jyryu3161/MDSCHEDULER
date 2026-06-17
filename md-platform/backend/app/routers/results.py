@@ -27,14 +27,14 @@ def _get_owned_job(db: Session, job_id: str, user: User) -> Job:
     return job
 
 
-def _analysis_summary(job_id: str, pose_index: int) -> dict:
+def _analysis_summary(job_id: str, pose_index: int, replica_index: int = 1) -> dict:
     """Return the per-pose FLAT scalar metrics for the UI summary cards + comparison table.
 
     The worker's analysis/summary.json nests scalar metrics under ``metrics`` alongside
     structural objects (``data_source``, ``plots_available``); the API exposes only the flat
     scalar metrics so the frontend renders them directly without hitting non-scalar values.
     """
-    pdir = storage.pose_dir(job_id, pose_index)
+    pdir = storage.pose_dir(job_id, pose_index, replica_index)
     summary = storage.read_json(pdir / "analysis" / "summary.json")
     if not isinstance(summary, dict):
         return {}
@@ -43,8 +43,8 @@ def _analysis_summary(job_id: str, pose_index: int) -> dict:
     return {k: v for k, v in source.items() if not isinstance(v, (dict, list))}
 
 
-def _plots_available(job_id: str, pose_index: int) -> list[str]:
-    plots_dir = storage.pose_dir(job_id, pose_index) / "analysis" / "plots"
+def _plots_available(job_id: str, pose_index: int, replica_index: int = 1) -> list[str]:
+    plots_dir = storage.pose_dir(job_id, pose_index, replica_index) / "analysis" / "plots"
     available: list[str] = []
     if plots_dir.exists():
         present = {p.stem for p in plots_dir.glob("*.json")}
@@ -54,21 +54,21 @@ def _plots_available(job_id: str, pose_index: int) -> list[str]:
     return available
 
 
-def _mmpbsa(job_id: str, pose_index: int) -> dict | None:
+def _mmpbsa(job_id: str, pose_index: int, replica_index: int = 1) -> dict | None:
     """Per-pose MM/PBSA/MM/GBSA binding ΔG (analysis/mmpbsa.json), or None if not computed."""
-    data = storage.read_json(storage.pose_dir(job_id, pose_index) / "analysis" / "mmpbsa.json")
+    data = storage.read_json(storage.pose_dir(job_id, pose_index, replica_index) / "analysis" / "mmpbsa.json")
     return data or None
 
 
-def _per_residue(job_id: str, pose_index: int) -> dict | None:
+def _per_residue(job_id: str, pose_index: int, replica_index: int = 1) -> dict | None:
     """Per-residue ΔG decomposition (analysis/per_residue.json) — binding hotspots."""
-    data = storage.read_json(storage.pose_dir(job_id, pose_index) / "analysis" / "per_residue.json")
+    data = storage.read_json(storage.pose_dir(job_id, pose_index, replica_index) / "analysis" / "per_residue.json")
     return data or None
 
 
-def _bound_window(job_id: str, pose_index: int) -> dict | None:
+def _bound_window(job_id: str, pose_index: int, replica_index: int = 1) -> dict | None:
     """Auto-detected bound window from analysis/summary.json (leading in-pocket segment)."""
-    summary = storage.read_json(storage.pose_dir(job_id, pose_index) / "analysis" / "summary.json")
+    summary = storage.read_json(storage.pose_dir(job_id, pose_index, replica_index) / "analysis" / "summary.json")
     if isinstance(summary, dict):
         bw = summary.get("bound_window")
         if isinstance(bw, dict):
@@ -85,12 +85,12 @@ def _residue_key(chain, resnum) -> tuple:
     return (str(chain or "").strip(), rn)
 
 
-def _hotspots(job_id: str, pose_index: int) -> list[dict]:
+def _hotspots(job_id: str, pose_index: int, replica_index: int = 1) -> list[dict]:
     """Unified hotspot table: merge per-residue ΔG (MM/PBSA) with geometric contact
     frequency + mean H-bonds (analysis/residue_contacts.json, over the bound window) by
     residue. Either source may be absent; we union both and sort by ΔG (most favorable
     first), falling back to contact frequency when ΔG is unavailable."""
-    pdir = storage.pose_dir(job_id, pose_index)
+    pdir = storage.pose_dir(job_id, pose_index, replica_index)
     per_res = storage.read_json(pdir / "analysis" / "per_residue.json")
     contacts = storage.read_json(pdir / "analysis" / "residue_contacts.json")
 
@@ -136,16 +136,16 @@ def _hotspots(job_id: str, pose_index: int) -> list[dict]:
     return rows
 
 
-def _trajectory_path(job_id: str, pose_index: int) -> Path | None:
-    vis = storage.pose_dir(job_id, pose_index) / "visualization"
+def _trajectory_path(job_id: str, pose_index: int, replica_index: int = 1) -> Path | None:
+    vis = storage.pose_dir(job_id, pose_index, replica_index) / "visualization"
     pdb = vis / "trajectory.pdb"
     if pdb.exists():
         return pdb
     return None
 
 
-def _movie_path(job_id: str, pose_index: int) -> Path | None:
-    vis = storage.pose_dir(job_id, pose_index) / "visualization"
+def _movie_path(job_id: str, pose_index: int, replica_index: int = 1) -> Path | None:
+    vis = storage.pose_dir(job_id, pose_index, replica_index) / "visualization"
     for cand in ("movie.mp4", "movie.webm", "trajectory.mp4", "trajectory.webm"):
         p = vis / cand
         if p.exists():
@@ -165,14 +165,14 @@ def _subjob_result(job_id: str, sj: SubJob) -> SubJobResult:
         ns_per_day=sj.ns_per_day,
         result_path=sj.result_path,
         error_message=sj.error_message,
-        analysis_summary=_analysis_summary(job_id, sj.pose_index),
-        plots_available=_plots_available(job_id, sj.pose_index),
-        has_trajectory=_trajectory_path(job_id, sj.pose_index) is not None,
-        has_movie=_movie_path(job_id, sj.pose_index) is not None,
-        mmpbsa=_mmpbsa(job_id, sj.pose_index),
-        per_residue=_per_residue(job_id, sj.pose_index),
-        bound_window=_bound_window(job_id, sj.pose_index),
-        hotspots=_hotspots(job_id, sj.pose_index),
+        analysis_summary=_analysis_summary(job_id, sj.pose_index, sj.replica_index),
+        plots_available=_plots_available(job_id, sj.pose_index, sj.replica_index),
+        has_trajectory=_trajectory_path(job_id, sj.pose_index, sj.replica_index) is not None,
+        has_movie=_movie_path(job_id, sj.pose_index, sj.replica_index) is not None,
+        mmpbsa=_mmpbsa(job_id, sj.pose_index, sj.replica_index),
+        per_residue=_per_residue(job_id, sj.pose_index, sj.replica_index),
+        bound_window=_bound_window(job_id, sj.pose_index, sj.replica_index),
+        hotspots=_hotspots(job_id, sj.pose_index, sj.replica_index),
     )
 
 
@@ -335,8 +335,8 @@ def get_trajectory(
     user: User = Depends(get_current_user),
 ) -> FileResponse:
     _get_owned_job(db, job_id, user)
-    pose_index = _resolve_pose_index(db, job_id, subjob_id)
-    pdb = _trajectory_path(job_id, pose_index)
+    pose_index, replica_index = _resolve_pose(db, job_id, subjob_id)
+    pdb = _trajectory_path(job_id, pose_index, replica_index)
     if pdb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trajectory not available.")
     return FileResponse(
@@ -355,26 +355,31 @@ def get_movie(
     user: User = Depends(get_current_user),
 ) -> FileResponse:
     _get_owned_job(db, job_id, user)
-    pose_index = _resolve_pose_index(db, job_id, subjob_id)
-    movie = _movie_path(job_id, pose_index)
+    pose_index, replica_index = _resolve_pose(db, job_id, subjob_id)
+    movie = _movie_path(job_id, pose_index, replica_index)
     if movie is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Movie not available.")
     media_type = "video/mp4" if movie.suffix == ".mp4" else "video/webm"
     return FileResponse(path=str(movie), media_type=media_type, filename=movie.name)
 
 
-def _resolve_pose_index(db: Session, job_id: str, subjob_id: str | None) -> int:
-    """Resolve a pose index from subjob_id, or default to the best (first) pose."""
+def _resolve_pose(db: Session, job_id: str, subjob_id: str | None) -> tuple[int, int]:
+    """Resolve (pose_index, replica_index) from subjob_id, or default to the best (first) pose's
+    canonical replica 1. Replica-aware so trajectory/movie serve the requested replica, not just
+    replica 1."""
     if subjob_id:
         sj = db.get(SubJob, subjob_id)
         if sj is None or sj.job_id != job_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SubJob not found.")
-        return sj.pose_index
+        return sj.pose_index, sj.replica_index
     first = (
-        db.execute(select(SubJob).where(SubJob.job_id == job_id).order_by(SubJob.pose_index).limit(1))
+        db.execute(
+            select(SubJob).where(SubJob.job_id == job_id)
+            .order_by(SubJob.pose_index, SubJob.replica_index).limit(1)
+        )
         .scalars()
         .first()
     )
     if first is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No poses for this job.")
-    return first.pose_index
+    return first.pose_index, first.replica_index

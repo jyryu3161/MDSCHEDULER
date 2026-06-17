@@ -52,7 +52,7 @@ _CONTACTS = {"residues": [
 
 def test_merge_both_sources(tmp_path, monkeypatch):
     pose = _pose(tmp_path, _PER_RES, _CONTACTS)
-    monkeypatch.setattr(storage, "pose_dir", lambda j, p: pose)
+    monkeypatch.setattr(storage, "pose_dir", lambda j, p, r=1: pose)
     rows = R._hotspots("job", 1)
     # ΔG rows first (ascending), then contact-only (PRO7) last.
     assert [r["residue"] for r in rows] == ["ILE4", "TYR6", "CYS2", "PRO7"]
@@ -66,7 +66,7 @@ def test_merge_both_sources(tmp_path, monkeypatch):
 
 def test_merge_dg_only(tmp_path, monkeypatch):
     pose = _pose(tmp_path, _PER_RES, None)
-    monkeypatch.setattr(storage, "pose_dir", lambda j, p: pose)
+    monkeypatch.setattr(storage, "pose_dir", lambda j, p, r=1: pose)
     rows = R._hotspots("job", 1)
     assert [r["residue"] for r in rows] == ["ILE4", "TYR6", "CYS2"]
     assert all(r["contact_frequency"] is None for r in rows)
@@ -74,7 +74,7 @@ def test_merge_dg_only(tmp_path, monkeypatch):
 
 def test_merge_contacts_only(tmp_path, monkeypatch):
     pose = _pose(tmp_path, None, _CONTACTS)
-    monkeypatch.setattr(storage, "pose_dir", lambda j, p: pose)
+    monkeypatch.setattr(storage, "pose_dir", lambda j, p, r=1: pose)
     rows = R._hotspots("job", 1)
     # No ΔG anywhere -> ranked by contact frequency desc.
     assert [r["residue"] for r in rows] == ["ILE4", "TYR6", "PRO7"]
@@ -83,7 +83,7 @@ def test_merge_contacts_only(tmp_path, monkeypatch):
 
 def test_merge_neither_source(tmp_path, monkeypatch):
     pose = _pose(tmp_path, None, None)
-    monkeypatch.setattr(storage, "pose_dir", lambda j, p: pose)
+    monkeypatch.setattr(storage, "pose_dir", lambda j, p, r=1: pose)
     assert R._hotspots("job", 1) == []
 
 

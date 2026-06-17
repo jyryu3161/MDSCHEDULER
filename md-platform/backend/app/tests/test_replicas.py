@@ -112,6 +112,49 @@ def test_aggregate_tolerates_missing_replica_results():
     assert len(agg[0]["replicas"]) == 2        # both replicas listed, one with None values
 
 
+# ── M2: results helpers resolve per-replica directories ──────────────────────
+def _write_analysis(job_id, pose, replica, *, gbsa, with_traj=False):
+    d = storage.pose_dir(job_id, pose, replica) / "analysis"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "mmpbsa.json").write_text(json.dumps({"gbsa_dg_kcal_mol": gbsa, "pose_occupancy": 0.9}))
+    (d / "summary.json").write_text(json.dumps({"metrics": {"gbsa": gbsa}}))
+    if with_traj:
+        vis = storage.pose_dir(job_id, pose, replica) / "visualization"
+        vis.mkdir(parents=True, exist_ok=True)
+        (vis / "trajectory.pdb").write_text("MODEL\nENDMDL\n")
+
+
+def test_results_helpers_read_their_own_replica():
+    from app.routers import results as R
+    job_id = "md_repres"
+    _write_analysis(job_id, 1, 1, gbsa=-10.0, with_traj=True)   # canonical replica
+    _write_analysis(job_id, 1, 2, gbsa=-20.0, with_traj=False)  # replica 2 (no trajectory)
+    # Each replica's helper reads its OWN dir, not replica 1.
+    assert R._mmpbsa(job_id, 1, 1)["gbsa_dg_kcal_mol"] == -10.0
+    assert R._mmpbsa(job_id, 1, 2)["gbsa_dg_kcal_mol"] == -20.0
+    assert R._analysis_summary(job_id, 1, 2)["gbsa"] == -20.0
+    # Trajectory exists only for replica 1 -> replica 2 must NOT borrow replica 1's file.
+    assert R._trajectory_path(job_id, 1, 1) is not None
+    assert R._trajectory_path(job_id, 1, 2) is None
+
+
+def test_subjob_result_uses_subjob_replica():
+    from app.routers import results as R
+    job_id = "md_repres2"
+    _write_analysis(job_id, 1, 1, gbsa=-11.0)
+    _write_analysis(job_id, 1, 2, gbsa=-22.0)
+
+    def _sj(replica):
+        return SubJob(id=jobs_service.subjob_id(job_id, 1, replica), job_id=job_id, pose_index=1,
+                      replica_index=replica, docking_score=-5.0, status="completed", progress=100.0,
+                      completed_ns=10.0, ns_per_day=1.0)
+
+    r1 = R._subjob_result(job_id, _sj(1))
+    r2 = R._subjob_result(job_id, _sj(2))
+    assert r1.mmpbsa["gbsa_dg_kcal_mol"] == -11.0
+    assert r2.mmpbsa["gbsa_dg_kcal_mol"] == -22.0   # replica 2 served its own data, not replica 1
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-q"]))
