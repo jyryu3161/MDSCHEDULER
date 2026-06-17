@@ -75,10 +75,19 @@ class Settings(BaseSettings):
 
     MD_ENGINE: str = "auto"  # gromacs | mock | auto
     DOCK_ENGINE: str = "vina"  # peptide-design docking: vina (default, AutoDock Vina 1.2.7, rigid) | smina (flexible side chains) | auto
-    PROTEIN_FORCE_FIELD: str = "amber14sb"
+    # Default to ff19SB + OPC (recommended for binding studies); the worker pre-flights the
+    # GROMACS install and falls back to the *_FALLBACK pair when the ff19SB port is absent.
+    PROTEIN_FORCE_FIELD: str = "ff19SB"
     LIGAND_FORCE_FIELD: str = "gaff2"
     LIGAND_CHARGE_METHOD: str = "am1bcc"
-    WATER_MODEL: str = "tip3p"
+    WATER_MODEL: str = "opc"
+    PROTEIN_FORCE_FIELD_FALLBACK: str = "amber14sb"
+    WATER_MODEL_FALLBACK: str = "tip3p"
+    FORCEFIELD_AUTOFALLBACK: bool = True
+    # Solvation/equilibration protocol (forwarded to the worker).
+    BOX_PADDING_NM: float = 1.2
+    NVT_STEPS: int = 50000
+    NPT_STEPS: int = 125000
 
     REQUIRE_LIGAND_CHEMISTRY: bool = True
     ALLOW_SMILES_INPUT: bool = True
