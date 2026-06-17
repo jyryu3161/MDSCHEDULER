@@ -147,6 +147,13 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Gzip responses (SPA JS/CSS + JSON). The hashed bundles are served uncompressed otherwise
+    # (~140 KB index + ~165 KB react-vendor), which dominates first-load time for a remote
+    # client; gzip cuts them ~3x and also shrinks the polled JSON. minimum_size avoids
+    # compressing tiny payloads. Skips already-compressed assets (Plotly/NGL chunks gzip well too).
+    from starlette.middleware.gzip import GZipMiddleware
+    app.add_middleware(GZipMiddleware, minimum_size=512)
+
     # CORS for dev (Vite on 5173/3000 and the compose frontend). Allow all in dev so
     # the SPA proxy and direct calls both work; tighten via reverse proxy in prod.
     app.add_middleware(
