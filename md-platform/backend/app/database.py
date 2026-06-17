@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from typing import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -20,6 +20,29 @@ from .config import get_settings
 
 class Base(DeclarativeBase):
     """Declarative base for all ORM models."""
+
+
+def _apply_sqlite_pragmas(eng) -> None:
+    """SQLite concurrency hardening (no-op for PostgreSQL).
+
+    Default SQLite has no busy timeout, so when several writers contend — multiple parallel-MD
+    worker threads via DbReporter PLUS the API/SSE/WS — a write raises ``database is locked``
+    immediately and a running subjob fails mid-pipeline. Enable WAL (readers don't block the
+    writer) and a 30 s busy timeout (writers WAIT for the lock instead of erroring); NORMAL sync
+    is durable enough under WAL. Set on every new connection.
+    """
+    if not str(eng.url).startswith("sqlite"):
+        return
+
+    @event.listens_for(eng, "connect")
+    def _set_pragmas(dbapi_conn, _rec):  # noqa: ANN001
+        cur = dbapi_conn.cursor()
+        try:
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA busy_timeout=30000")
+            cur.execute("PRAGMA synchronous=NORMAL")
+        finally:
+            cur.close()
 
 
 def _build_engine(database_url: str):
@@ -48,6 +71,7 @@ def _build_engine(database_url: str):
 
 _settings = get_settings()
 engine = _build_engine(_settings.DATABASE_URL)
+_apply_sqlite_pragmas(engine)  # WAL + busy_timeout so parallel-MD writers wait, not fail
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False, class_=Session)
 

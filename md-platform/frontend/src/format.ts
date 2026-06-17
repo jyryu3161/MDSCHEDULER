@@ -1,8 +1,16 @@
 // Small presentation helpers shared across pages. Pure functions only.
 
+// The backend serializes naive UTC timestamps (e.g. "2026-06-17T05:14:03", no tz suffix).
+// `new Date()` parses a tz-less string as LOCAL time, shifting every timestamp by the viewer's
+// UTC offset (e.g. KST +9 -> "9h ago" for something just created). Treat a tz-less string as UTC.
+function parseServerDate(iso: string): Date {
+  const hasTz = /([zZ])$|[+-]\d{2}:?\d{2}$/.test(iso);
+  return new Date(hasTz ? iso : `${iso}Z`);
+}
+
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return "—";
-  const d = new Date(iso);
+  const d = parseServerDate(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleString(undefined, {
     year: "numeric",
@@ -28,7 +36,7 @@ function humanizeSpan(ms: number): string {
 
 export function formatRelative(iso: string | null | undefined): string {
   if (!iso) return "—";
-  const d = new Date(iso);
+  const d = parseServerDate(iso);
   if (Number.isNaN(d.getTime())) return iso;
   const diff = Date.now() - d.getTime();
   // Small negative diffs are clock skew between server and client: show "just
