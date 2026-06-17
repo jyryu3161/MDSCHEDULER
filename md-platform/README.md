@@ -201,6 +201,14 @@ The **Peptide Design** tab evolves peptides to bind a target compound:
   - **Docking engine**: `vina` (default, AutoDock Vina 1.2.7, rigid) · `smina`
     (flexible receptor side chains) · `gnina` (CNN scoring, GPU; needs the binary) ·
     `auto`. Both strategy and engine are selectable per run in the create form.
+  - **Replicas/cand.** (`n_replicas`, 1–5, default 1): independent MD repeats per
+    evaluated candidate (each in its own `rep_RR/` working dir; independence comes from
+    the NVT `gen_seed = -1` random velocity seed). The GA **fitness uses the replica-mean
+    ΔG** and the run log reports per-candidate `mean ± SEM`, so selection is driven by a
+    less noisy estimate than a single trajectory. Cost scales linearly with this factor
+    (on top of population × generations × top-k MD), so keep it small. Set it in the
+    create form ("Replicas/cand.") — note the mock ΔG is deterministic, so replicas only
+    spread under the real GROMACS engine.
 - **Output**: a candidate leaderboard (ΔG / contacts / docking) + a best-so-far
   convergence chart.
 
@@ -253,7 +261,11 @@ MM/GBSA step automatically uses the matching AmberTools leaprc
 > MM/GBSA value is a **relative ranking score, not an absolute ΔG/Kd**. Each run
 > also reports **pose occupancy** (fraction of the trajectory the ligand stayed
 > bound); a result with occupancy < 50 % is flagged unreliable. For statistical
-> error bars, run replicas (different seeds) and compare mean ± SEM.
+> error bars, set **Replicas per pose** (`n_replicas`, 1–10, default 1) in the MD
+> create form: each pose then runs that many independent MD repeats (different random
+> velocity seeds) and the job detail reports **mean ± SEM** across them (n = replicas,
+> not frames). The peptide-design GA has the analogous **Replicas/cand.** knob
+> (see [Peptide design](#peptide-design-ga)).
 
 Standard GROMACS `.mdp` templates live in `md-env/templates/gromacs/`:
 
