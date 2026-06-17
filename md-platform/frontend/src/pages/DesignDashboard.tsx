@@ -201,9 +201,12 @@ function CreateDesignForm({ onCreated }: { onCreated: () => void }) {
 
         <div>
           <label className={labelCls}>Initial peptide sequences (same length, standard AAs)</label>
-          <textarea className={`${inputCls} font-mono`} rows={2} value={sequences}
+          <textarea className={`${inputCls} font-mono`} rows={4} value={sequences}
                     onChange={(e) => setSequences(e.target.value)}
-                    placeholder="KCCIVYP, AAAAAAA, GGGGGGG" required />
+                    placeholder={"One sequence per line (commas/spaces also OK):\nKCCIVYP\nAAAAAAA\nGGGGGGG"} required />
+          <p className="mt-1 text-xs text-slate-500">
+            Separate sequences by newline, comma, or space — all accepted. All must share one length.
+          </p>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
