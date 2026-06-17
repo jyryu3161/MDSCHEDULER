@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -51,6 +52,20 @@ def _owned(db: Session, design_id: str, user: User) -> DesignJob:
     if dj is None or (dj.user_id != user.id and user.role != Role.ADMIN):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Design job not found.")
     return dj
+
+
+@router.get("/{design_id}/report")
+def get_design_report(
+    design_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> FileResponse:
+    """Serve the auto-generated publication report (report.html) for a design run, inline."""
+    _owned(db, design_id, user)
+    report = storage.storage_root() / "design" / design_id / "report.html"
+    if not report.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not available for this design.")
+    return FileResponse(path=str(report), media_type="text/html")
 
 
 @router.post("", response_model=DesignJobOut, status_code=status.HTTP_201_CREATED)

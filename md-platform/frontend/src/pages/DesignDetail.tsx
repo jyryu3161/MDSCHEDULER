@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
-import { designApi, normalizeError } from "../api";
+import { designApi, normalizeError, reportApi } from "../api";
 import {
   Card,
   DataTable,
@@ -145,6 +145,17 @@ export function DesignDetail() {
         </div>
         <div className="flex items-center gap-3">
           <JobStatusBadge status={job.status} />
+          {job.status === "completed" && (
+            <button
+              type="button"
+              onClick={() =>
+                reportApi.openDesignReport(designId).catch((e) => setError(normalizeError(e).message))
+              }
+              className="rounded-md border border-brand-300 px-3 py-1.5 text-sm font-medium text-brand-700 hover:bg-brand-50"
+            >
+              View report
+            </button>
+          )}
           {canCancel && (
             <button onClick={cancel} disabled={cancelling}
                     className="rounded-md border border-rose-300 px-3 py-1.5 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50">

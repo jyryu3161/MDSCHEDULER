@@ -306,6 +306,15 @@ export interface QueueResponse {
   running: QueueItem[];
 }
 
+// ── Admin report (Gemini) settings ───────────────────────────────────────────
+
+export interface ReportSettings {
+  gemini_model: string;
+  key_set: boolean;
+  key_masked: string;
+  key_source: "db" | "env" | "none";
+}
+
 // ── GPU (CONTRACT §2 gpustatus) ──────────────────────────────────────────────
 
 export const GPU_POOLS = ["md", "design", "excluded"] as const;

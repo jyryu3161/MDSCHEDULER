@@ -32,9 +32,27 @@ def _design_config(dj: DesignJob) -> dict:
     }
 
 
+def _gemini_config() -> tuple[str, str]:
+    """Admin-configured Gemini key/model (DB override) with env fallback; never raises."""
+    s = get_settings()
+    try:
+        from . import settings_store
+        db = SessionLocal()
+        try:
+            return settings_store.gemini_config(db)
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001
+        return (s.GEMINI_API_KEY or "", s.GEMINI_MODEL or "gemini-3.5-flash")
+
+
 def _runner_settings(dj: DesignJob) -> dict:
     s = get_settings()
+    gemini_key, gemini_model = _gemini_config()
     return {
+        "GEMINI_API_KEY": gemini_key,
+        "GEMINI_MODEL": gemini_model,
+        "REPORT_ENABLED": s.REPORT_ENABLED,
         "STORAGE_ROOT": s.STORAGE_ROOT,
         "MD_ENGINE": s.resolved_md_engine(),
         "DOCK_ENGINE": dj.dock_engine or s.DOCK_ENGINE,  # per-run choice overrides the env default

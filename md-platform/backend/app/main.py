@@ -30,6 +30,7 @@ from .routers import (
     jobs,
     queue,
     results,
+    settings as settings_router,
     uploads,
     ws,
 )
@@ -177,6 +178,7 @@ def create_app() -> FastAPI:
         events.router,
         ws.router,
         internal.router,
+        settings_router.router,
     ]
     for r in api_routers:
         app.include_router(r, prefix="/api")

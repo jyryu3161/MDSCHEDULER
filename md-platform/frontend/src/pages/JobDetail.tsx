@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { jobApi, normalizeError, subscribeJob } from "../api";
+import { jobApi, normalizeError, reportApi, subscribeJob } from "../api";
 import { useAuth } from "../auth";
 import { Card, ErrorBanner, ProgressBar, Spinner } from "../components/ui";
 import { DataTable, type Column } from "../components/DataTable";
@@ -259,12 +259,25 @@ export function JobDetail() {
       align: "right",
       render: (s) =>
         s.status === "completed" ? (
-          <Link
-            className="text-sm text-brand-700 hover:underline"
-            to={`/jobs/${job.id}/results?subjob_id=${encodeURIComponent(s.id)}`}
-          >
-            Results
-          </Link>
+          <div className="flex items-center justify-end gap-3">
+            <Link
+              className="text-sm text-brand-700 hover:underline"
+              to={`/jobs/${job.id}/results?subjob_id=${encodeURIComponent(s.id)}`}
+            >
+              Results
+            </Link>
+            <button
+              type="button"
+              className="text-sm text-brand-700 hover:underline"
+              onClick={() =>
+                reportApi
+                  .openJobReport(job.id, s.id)
+                  .catch((err) => setError(normalizeError(err).message))
+              }
+            >
+              Report
+            </button>
+          </div>
         ) : s.status === "failed" && s.error_message ? (
           <span className="text-xs text-red-600" title={s.error_message}>
             error

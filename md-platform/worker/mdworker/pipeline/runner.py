@@ -21,6 +21,7 @@ from mdworker.pipeline.context import JobCancelled, JobContext
 from mdworker.pipeline.steps import (
     analyze_md,
     assign_bond_orders,
+    generate_report,
     mmpbsa,
     package_results,
     parameterize_ligand,
@@ -112,6 +113,9 @@ def _coerce_settings(settings):
             require_ligand_chemistry=as_bool(d.get("REQUIRE_LIGAND_CHEMISTRY"), base.require_ligand_chemistry),
             allow_smiles_input=as_bool(d.get("ALLOW_SMILES_INPUT"), base.allow_smiles_input),
             allow_meeko_mapping_input=as_bool(d.get("ALLOW_MEEKO_MAPPING_INPUT"), base.allow_meeko_mapping_input),
+            gemini_api_key=pick("GEMINI_API_KEY", base.gemini_api_key),
+            gemini_model=pick("GEMINI_MODEL", base.gemini_model),
+            report_enabled=as_bool(d.get("REPORT_ENABLED"), base.report_enabled),
             mdp_template_dir=pick("MDP_TEMPLATE_DIR", base.mdp_template_dir),
             storage_root=pick("STORAGE_ROOT", base.storage_root),
             trajectory_output_ps=int(pick("TRAJECTORY_OUTPUT_PS", base.trajectory_output_ps)),
@@ -274,6 +278,9 @@ def run_subjob(subjob_id: str, *, reporter, settings) -> Dict[str, Any]:
         # fails the job (skips gracefully if gmx_MMPBSA/MPI is unavailable).
         mmpbsa.run(ctx, settings, md=md)
         ctx.check_cancelled()
+        # Auto-report (Methods + results + interpretation + figures + trajectory) as report.html.
+        # Runs BEFORE packaging so it is included in results.zip; never fails the job.
+        generate_report.run(ctx, settings, md=md, analysis=analysis)
         pkg = package_results.run(ctx, settings, bond_orders=bonds, prepared=prep,
                                   params=params, md=md, analysis=analysis)
 

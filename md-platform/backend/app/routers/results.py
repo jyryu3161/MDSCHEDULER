@@ -271,6 +271,24 @@ def download_pose(
     )
 
 
+@router.get("/{job_id}/subjobs/{subjob_id}/report")
+def get_report(
+    job_id: str,
+    subjob_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> FileResponse:
+    """Serve the auto-generated publication report (report.html) for one pose, inline."""
+    _get_owned_job(db, job_id, user)
+    sj = db.get(SubJob, subjob_id)
+    if sj is None or sj.job_id != job_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SubJob not found.")
+    report = storage.pose_dir(job_id, sj.pose_index, sj.replica_index) / "report.html"
+    if not report.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not available for this pose.")
+    return FileResponse(path=str(report), media_type="text/html")
+
+
 @router.get("/{job_id}/plots/{plot_type}")
 def get_plot(
     job_id: str,

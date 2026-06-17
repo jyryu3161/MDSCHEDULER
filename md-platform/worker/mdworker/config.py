@@ -82,6 +82,13 @@ class Settings:
     allow_smiles_input: bool = True
     allow_meeko_mapping_input: bool = True
 
+    # Auto-report (Gemini narration). Key/model are admin-configurable in the backend and arrive
+    # via the job settings, or fall back to the environment. An empty key still produces a report
+    # (deterministic templates); report_enabled=False skips report generation entirely.
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.5-flash"
+    report_enabled: bool = True
+
     # Solvation box padding (gmx editconf -d, nm). 1.2 nm keeps the solute well clear of its
     # periodic image for binding studies (the previous 1.0 nm is on the small side).
     box_padding_nm: float = 1.2
@@ -146,6 +153,9 @@ def load_settings() -> Settings:
         require_ligand_chemistry=_env_bool("REQUIRE_LIGAND_CHEMISTRY", True),
         allow_smiles_input=_env_bool("ALLOW_SMILES_INPUT", True),
         allow_meeko_mapping_input=_env_bool("ALLOW_MEEKO_MAPPING_INPUT", True),
+        gemini_api_key=_env("GEMINI_API_KEY", ""),
+        gemini_model=_env("GEMINI_MODEL", "gemini-3.5-flash"),
+        report_enabled=_env_bool("REPORT_ENABLED", True),
         mdp_template_dir=_env("MDP_TEMPLATE_DIR", "/app/md-env/templates/gromacs"),
         storage_root=_env("STORAGE_ROOT", "/app/storage"),
         trajectory_output_ps=_env_int("TRAJECTORY_OUTPUT_PS", 100),

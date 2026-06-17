@@ -99,6 +99,13 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "change-me-in-production"
     JWT_EXPIRE_MINUTES: int = 480
 
+    # Auto-report (Gemini narration) — environment fallbacks. The admin can override the key and
+    # model at runtime from the Admin tab (stored in appsettings, which takes precedence). An empty
+    # key still yields a report (deterministic templates); REPORT_ENABLED=false skips reports.
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-3.5-flash"
+    REPORT_ENABLED: bool = True
+
     QUEUE_BACKEND: str = "auto"  # rq | local | auto
     INTERNAL_API_TOKEN: str = "internal-worker-token-change-me"
 

@@ -147,9 +147,26 @@ class QueueManager:
         except Exception as exc:  # noqa: BLE001
             self._fail_subjob(subjob_id, reporter, f"Subjob execution error: {exc}")
 
+    def _gemini_config(self) -> tuple[str, str]:
+        """Admin-configured Gemini key/model (DB override) with env fallback; never raises."""
+        try:
+            from ..database import SessionLocal
+            from . import settings_store
+            db = SessionLocal()
+            try:
+                return settings_store.gemini_config(db)
+            finally:
+                db.close()
+        except Exception:  # noqa: BLE001 — report config must not block enqueue
+            return (self._settings.GEMINI_API_KEY or "", self._settings.GEMINI_MODEL or "gemini-3.5-flash")
+
     def _runner_settings(self) -> dict[str, Any]:
         s = self._settings
+        gemini_key, gemini_model = self._gemini_config()
         return {
+            "GEMINI_API_KEY": gemini_key,
+            "GEMINI_MODEL": gemini_model,
+            "REPORT_ENABLED": s.REPORT_ENABLED,
             "STORAGE_ROOT": s.STORAGE_ROOT,
             "MD_ENGINE": s.resolved_md_engine(),
             "MD_MOCK_SPEEDUP": s.MD_MOCK_SPEEDUP,

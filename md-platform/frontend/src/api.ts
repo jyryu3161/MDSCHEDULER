@@ -16,6 +16,7 @@ import type {
   PlotType,
   Priority,
   QueueResponse,
+  ReportSettings,
   SubJobResultDetail,
   TrajectoryPayload,
   UploadResponse,
@@ -297,6 +298,49 @@ export const dashboardApi = {
   async summary(): Promise<DashboardSummary> {
     const { data } = await http.get<DashboardSummary>("/dashboard/summary");
     return data;
+  },
+};
+
+// ── Admin settings (Gemini auto-report key/model) ────────────────────────────
+
+export const settingsApi = {
+  async getReport(): Promise<ReportSettings> {
+    const { data } = await http.get<ReportSettings>("/settings/report");
+    return data;
+  },
+  async putReport(body: {
+    gemini_api_key?: string;
+    gemini_model?: string;
+  }): Promise<ReportSettings> {
+    const { data } = await http.put<ReportSettings>("/settings/report", body);
+    return data;
+  },
+};
+
+// ── Auto-report (publication HTML) ───────────────────────────────────────────
+// Reports are auth-gated, so fetch the HTML as a blob (carrying the bearer token via the
+// axios interceptor) and open it in a new tab.
+
+function openHtmlBlob(blob: Blob): void {
+  const url = URL.createObjectURL(blob);
+  window.open(url, "_blank", "noopener");
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+export const reportApi = {
+  async openJobReport(jobId: string, subjobId: string): Promise<void> {
+    const { data } = await http.get(
+      `/jobs/${encodeURIComponent(jobId)}/subjobs/${encodeURIComponent(subjobId)}/report`,
+      { responseType: "blob" },
+    );
+    openHtmlBlob(data as Blob);
+  },
+  async openDesignReport(designId: string): Promise<void> {
+    const { data } = await http.get(
+      `/design/${encodeURIComponent(designId)}/report`,
+      { responseType: "blob" },
+    );
+    openHtmlBlob(data as Blob);
   },
 };
 

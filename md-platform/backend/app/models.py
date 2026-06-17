@@ -343,3 +343,17 @@ class DesignCandidate(Base):
     fitness: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     refined: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)  # MD-evaluated
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class AppSetting(Base):
+    """Admin-editable runtime key/value settings (e.g. the Gemini report API key + model).
+
+    A DB value set from the Admin tab takes precedence over the corresponding environment
+    default, so an operator can configure/rotate the key without redeploying. Created
+    automatically by create_all; admin-only at the API layer."""
+
+    __tablename__ = "appsettings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)

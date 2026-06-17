@@ -152,6 +152,15 @@ def run_design(design_id: str, config: Dict[str, Any], reporter, settings: Dict[
         )
         result_dict = ga.result_to_dict(result)
         (workdir / "design_result.json").write_text(json.dumps(result_dict, indent=2))
+        # Auto-report (Methods + results + convergence figure) as report.html. Never fails the run.
+        if str(settings.get("REPORT_ENABLED", "true")).strip().lower() not in ("0", "false", "no", "off"):
+            try:
+                from mdworker.report.builder import build_design_report
+                (workdir / "report.html").write_text(
+                    build_design_report(workdir, config, settings, result_dict), encoding="utf-8")
+                log("Wrote design report.html.")
+            except Exception as exc:  # noqa: BLE001 — report is optional
+                log(f"Design report generation skipped: {exc}", level="warning")
         reporter.set_result(
             design_id, best_sequence=result.best_sequence, best_fitness=result.best_fitness,
             best_docking_score=result.best_docking_score, best_md_dg=result.best_md_dg,

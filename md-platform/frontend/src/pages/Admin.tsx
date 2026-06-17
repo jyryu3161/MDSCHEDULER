@@ -5,6 +5,7 @@ import {
   jobApi,
   normalizeError,
   queueApi,
+  settingsApi,
   subscribeDashboard,
 } from "../api";
 import { Card, ErrorBanner, ProgressBar } from "../components/ui";
@@ -19,9 +20,124 @@ import type {
   Priority,
   QueueItem,
   QueueResponse,
+  ReportSettings,
 } from "../types";
 
 const POLL_INTERVAL_MS = 5000;
+
+/** Admin-configurable Gemini key/model for the auto-generated MD/design reports. */
+function ReportSettingsCard() {
+  const [cfg, setCfg] = useState<ReportSettings | null>(null);
+  const [model, setModel] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    settingsApi
+      .getReport()
+      .then((c) => {
+        setCfg(c);
+        setModel(c.gemini_model);
+      })
+      .catch((e) => setErr(normalizeError(e).message));
+  }, []);
+
+  const save = async () => {
+    setBusy(true);
+    setMsg(null);
+    setErr(null);
+    try {
+      const body: { gemini_api_key?: string; gemini_model?: string } = {};
+      if (model.trim()) body.gemini_model = model.trim();
+      if (apiKey !== "") body.gemini_api_key = apiKey; // only overwrite when a new key is typed
+      const c = await settingsApi.putReport(body);
+      setCfg(c);
+      setApiKey("");
+      setMsg("Saved.");
+    } catch (e) {
+      setErr(normalizeError(e).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clearKey = async () => {
+    setBusy(true);
+    setMsg(null);
+    setErr(null);
+    try {
+      const c = await settingsApi.putReport({ gemini_api_key: "" });
+      setCfg(c);
+      setApiKey("");
+      setMsg("Stored key cleared (using environment fallback).");
+    } catch (e) {
+      setErr(normalizeError(e).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card title="Report generation (Gemini)">
+      <p className="mb-3 text-sm text-slate-500">
+        Finished MD and design jobs auto-generate a publication HTML report (Methods, results,
+        figures, embedded trajectory). The narrative is written by Gemini with this key; without a
+        key the report still builds from deterministic templates.
+      </p>
+      {err && (
+        <div className="mb-3">
+          <ErrorBanner message={err} onDismiss={() => setErr(null)} />
+        </div>
+      )}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label className="label" htmlFor="gem-model">
+            Model
+          </label>
+          <input
+            id="gem-model"
+            className="input font-mono"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="gemini-3.5-flash"
+          />
+        </div>
+        <div>
+          <label className="label" htmlFor="gem-key">
+            API key
+            {cfg?.key_set && (
+              <span className="ml-1 text-slate-400">
+                · current {cfg.key_masked} ({cfg.key_source})
+              </span>
+            )}
+          </label>
+          <input
+            id="gem-key"
+            type="password"
+            autoComplete="off"
+            className="input font-mono"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={cfg?.key_set ? "•••••• (leave blank to keep current)" : "Paste Gemini API key"}
+          />
+        </div>
+      </div>
+      <div className="mt-4 flex items-center gap-3">
+        <button type="button" className="btn-primary" disabled={busy} onClick={save}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+        {cfg?.key_source === "db" && (
+          <button type="button" className="btn-secondary" disabled={busy} onClick={clearKey}>
+            Clear stored key
+          </button>
+        )}
+        {msg && <span className="text-sm text-green-600">{msg}</span>}
+      </div>
+    </Card>
+  );
+}
 
 export function Admin() {
   const [gpus, setGpus] = useState<GpuStatus[]>([]);
@@ -457,6 +573,9 @@ export function Admin() {
           </div>
         )}
       </Card>
+
+      {/* Auto-report (Gemini) settings */}
+      <ReportSettingsCard />
 
       {/* Queue priority control */}
       <Card title="Queue priority">
