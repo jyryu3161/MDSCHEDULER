@@ -110,6 +110,9 @@ def test_autoscientist_runs_and_improves(tmp_path, _mock_tools):
     asb = result["autoscientist"]
     assert asb["n_directions"] == 3 and len(asb["directions"]) == 3
     assert "forum" in asb and asb["champion_recipe"]["sequence"] == result["best_sequence"]
+    # Multi-agent team structure: one analyst per team + an experiment-agent pool, with a forum.
+    assert len(asb["agents"]["analysts"]) == 3 and len(asb["agents"]["experiment_agents"]) >= 3
+    assert len(asb["forum"]) > 0 and "no central planner" in asb["architecture"]
     # Candidates were persisted to the reporter (DB-compatible rows).
     assert len(rep.candidates) >= 3
     assert rep.result["best_sequence"] == result["best_sequence"]
