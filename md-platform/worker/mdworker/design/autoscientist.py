@@ -23,8 +23,10 @@ Implements the paper's algorithms:
     (+ MD/MM-GBSA) machinery, and promote the champion only past a noise-aware gate (re-confirm a
     borderline gain on a second seed); record to L and post a RESULT to F.
 
-Parallelism: experiment agents in a heartbeat pass evaluate their claimed candidates concurrently
-(the paper's parallel experiments). The run emits the SAME DesignResult shape as the GA (so the
+Parallelism: docking (CPU-bound) is run concurrently across a heartbeat pass's claimed candidates,
+but the GROMACS MD refinements are run SEQUENTIALLY — concurrent mdruns on a single design GPU
+oversubscribe the CPU and crawl (matches the GA's sequential MD). The run emits the SAME
+DesignResult shape as the GA (so the
 existing persistence, leaderboard, convergence figure, and report all work), plus a rich
 ``autoscientist`` block (roster/teams/agents/forum/dead-ends). Every LLM call degrades gracefully
 (Gemini down → default directions + guided mutation); no single candidate aborts the run.
@@ -370,7 +372,12 @@ def run_autoscientist(design_id: str, config: Dict[str, Any], reporter, settings
         reporter.set_status(design_id, "running_md")
         log(f"Bootstrapping with {len(seeds)} seed sequence(s).")
         boot = [s for s in dict.fromkeys(seeds) if _valid(s, peptide_length)]
-        for rec in _eval_batch(boot, "seed", 0, evaluate, refine=(eval_mode != "screen_only")):
+        boot_recs = _eval_batch(boot, "seed", 0, evaluate, refine=False)  # dock in parallel (CPU)
+        if eval_mode != "screen_only":
+            for rec in boot_recs:  # MD sequentially — one mdrun per GPU at a time (no contention)
+                _refine_record(rec, workdir, md_engine, n_replicas, md_length_ns, dock_cache,
+                               settings, config, gpu_id, log)
+        for rec in boot_recs:
             commit(rec); promote_gate(rec, "exp-1", 0)
         _persist_round(reporter, design_id, 0, state, records)
 
@@ -418,15 +425,16 @@ def run_autoscientist(design_id: str, config: Dict[str, Any], reporter, settings
                         break
                 if len(claims) >= per_pass:
                     break
-            refine_all = eval_mode == "md_only"
             batch = _eval_batch([c[1]["sequence"] for c in claims],
                                 {c[1]["sequence"]: c[1]["axis"] for c in claims}, rnd, evaluate,
-                                refine=refine_all)
-            if not refine_all and batch:  # hybrid: MD-refine the docking-promising half
-                batch.sort(key=lambda r: r["docking_score"])
-                for r in batch[: max(1, len(batch) // 2)]:
-                    _refine_record(r, workdir, md_engine, n_replicas, md_length_ns, dock_cache,
-                                   settings, config, gpu_id, log)
+                                refine=False)  # dock in parallel (CPU); MD is run sequentially below
+            batch.sort(key=lambda r: r["docking_score"])  # most negative (best) first
+            # MD-refine sequentially — one mdrun per GPU at a time (concurrent mdruns on one GPU
+            # oversubscribe the CPU and crawl). md_only refines all; hybrid refines the top half.
+            to_refine = batch if eval_mode == "md_only" else batch[: max(1, len(batch) // 2)]
+            for r in to_refine:
+                _refine_record(r, workdir, md_engine, n_replicas, md_length_ns, dock_cache,
+                               settings, config, gpu_id, log)
             agent_of = {c[1]["sequence"]: c[0] for c in claims}
             improved = False
             for rec in batch:
