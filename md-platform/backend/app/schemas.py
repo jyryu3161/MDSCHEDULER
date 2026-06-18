@@ -152,6 +152,9 @@ class JobCreate(BaseModel):
     priority: Literal["low", "normal", "high"] = "normal"
     hetatm_decisions: dict[str, str] = Field(default_factory=dict)
     cif_options: dict[str, Any] = Field(default_factory=dict)
+    # Opt-in MM-PBSA/GBSA binding ΔG after the production trajectory (gmx_MMPBSA). Off by default
+    # because it is slow and only meaningful for a stably-bound complex over a long run.
+    compute_mmpbsa: bool = False
 
 
 class JobOut(BaseModel):

@@ -246,6 +246,7 @@ def _stage_job_storage(
         "pressure": job.pressure,
         "priority": job.priority,
         "use_gpu": create.use_gpu,
+        "compute_mmpbsa": create.compute_mmpbsa,  # opt-in MM-PBSA/GBSA binding ΔG (mmpbsa step)
         "hetatm_decisions": create.hetatm_decisions,
         "cif_options": create.cif_options,
         "smiles": upload_meta.get("smiles"),
