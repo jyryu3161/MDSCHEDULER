@@ -34,6 +34,28 @@ class _LocalReporter:
             self._log(f"[{level}/{step}] {message}")
 
 
+def _load_compound_template(compound: str):
+    """Load the compound chemistry template, accepting an SDF/MOL/MOL2 file, a SMILES (.smi/.txt)
+    file, or a raw SMILES string. Returns (mol, err) — the design path may pass a .smi file
+    (created when the target compound is given as SMILES), which the file loader cannot parse."""
+    from mdworker.chem.mapping import load_template_mol
+    p = Path(compound)
+    suffix = p.suffix.lower()
+    if suffix in (".smi", ".smiles", ".txt"):
+        # File of "SMILES [name]" lines — take the first token of the first non-empty line.
+        smi = ""
+        if p.exists():
+            for line in p.read_text(errors="replace").splitlines():
+                if line.strip():
+                    smi = line.split()[0]
+                    break
+        return load_template_mol(chemistry_file=None, smiles=smi or compound.strip(), chem_source="smiles")
+    if p.exists():
+        return load_template_mol(chemistry_file=compound, smiles=None, chem_source="sdf")
+    # Not a file on disk → treat the value itself as a raw SMILES string.
+    return load_template_mol(chemistry_file=None, smiles=compound.strip(), chem_source="smiles")
+
+
 def _docked_ligand(pose_pdbqt: Path, compound_sdf: str, prep_dir: Path,
                    log: Optional[Callable[[str], None]] = None) -> tuple[Path, Path]:
     """Build a full-atom docked-ligand PDB + clean reference SDF from the Vina pose.
@@ -47,13 +69,13 @@ def _docked_ligand(pose_pdbqt: Path, compound_sdf: str, prep_dir: Path,
     from rdkit import Chem
     from rdkit.Chem import AllChem
 
-    from mdworker.chem.mapping import load_template_mol, map_pose_to_template, template_formula
+    from mdworker.chem.mapping import map_pose_to_template, template_formula
     from mdworker.io.pdbqt import parse_pdbqt_models
 
     poses = parse_pdbqt_models(str(pose_pdbqt))
     if not poses:
         raise RuntimeError(f"No poses parsed from {pose_pdbqt}.")
-    template, err = load_template_mol(chemistry_file=compound_sdf, smiles=None, chem_source="sdf")
+    template, err = _load_compound_template(compound_sdf)
     if template is None:
         raise RuntimeError(f"Failed to load compound template: {err}")
     mapped_h, formula, err = map_pose_to_template(poses[0], template=template)
