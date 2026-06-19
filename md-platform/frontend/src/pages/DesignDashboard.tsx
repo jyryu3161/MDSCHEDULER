@@ -23,6 +23,8 @@ export function DesignDashboard({ strategy = "ga" }: { strategy?: DesignStrategy
   const [jobs, setJobs] = useState<DesignJob[] | null>(null);
   const [gpus, setGpus] = useState<GpuStatus[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());  // finished runs picked for delete
+  const [deleting, setDeleting] = useState(false);
   const mounted = useRef(true);
 
   async function refresh() {
@@ -32,8 +34,40 @@ export function DesignDashboard({ strategy = "ga" }: { strategy?: DesignStrategy
       setJobs(j);
       setGpus(g);
       setError(null); // a successful refresh clears a stale error banner from a prior failure
+      // Drop selections for runs that no longer exist (e.g. deleted elsewhere).
+      const ids = new Set(j.map((d) => d.id));
+      setSelected((prev) => new Set([...prev].filter((id) => ids.has(id))));
     } catch (err) {
       if (mounted.current) setError(normalizeError(err).message);
+    }
+  }
+
+  function toggleOne(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function removeDesigns(ids: string[]) {
+    if (ids.length === 0) return;
+    const msg = ids.length === 1
+      ? "Delete this design run and all of its stored results?"
+      : `Delete ${ids.length} design runs and all of their stored results?`;
+    if (!window.confirm(msg)) return;
+    setDeleting(true);
+    try {
+      const results = await Promise.allSettled(ids.map((id) => designApi.remove(id)));
+      const failed = results.filter((r) => r.status === "rejected").length;
+      setSelected(new Set());
+      await refresh();  // refresh() resets the error banner, so report failures AFTER it
+      if (failed && mounted.current) {
+        setError(`${failed} of ${ids.length} deletions failed (only finished runs can be removed).`);
+      }
+    } finally {
+      if (mounted.current) setDeleting(false);
     }
   }
 
@@ -50,7 +84,37 @@ export function DesignDashboard({ strategy = "ga" }: { strategy?: DesignStrategy
 
   const designGpus = gpus.filter((g) => g.pool === "design");
 
+  // Only finished runs (completed/failed/cancelled) are deletable — deleting a live run would let
+  // its orchestrator thread write to a deleted row (the backend rejects non-terminal deletes).
+  const TERMINAL = new Set(["completed", "failed", "cancelled"]);
+  const rows = (jobs ?? []).filter((d) => (d.strategy ?? "ga") === strategy);
+  const terminalRows = rows.filter((d) => TERMINAL.has(d.status));
+  const allSelected = terminalRows.length > 0 && terminalRows.every((d) => selected.has(d.id));
+
   const columns: Column<DesignJob>[] = [
+    {
+      key: "select",
+      header: (
+        <input
+          type="checkbox"
+          aria-label="Select all finished runs"
+          checked={allSelected}
+          disabled={terminalRows.length === 0}
+          onChange={(e) =>
+            setSelected(e.target.checked ? new Set(terminalRows.map((d) => d.id)) : new Set())
+          }
+        />
+      ),
+      render: (d) =>
+        TERMINAL.has(d.status) ? (
+          <input
+            type="checkbox"
+            aria-label={`Select ${d.name}`}
+            checked={selected.has(d.id)}
+            onChange={() => toggleOne(d.id)}
+          />
+        ) : null,
+    },
     { key: "name", header: "Name", render: (d) => (
       <button className="text-brand-700 hover:underline" onClick={() => navigate(`${base}/${d.id}`)}>
         {d.name}
@@ -73,6 +137,22 @@ export function DesignDashboard({ strategy = "ga" }: { strategy?: DesignStrategy
       <span className="text-xs">{d.best_md_dg != null ? `${d.best_md_dg.toFixed(2)}` :
         d.best_docking_score != null ? `${d.best_docking_score.toFixed(2)} (dock)` : "—"}</span>
     ) },
+    {
+      key: "remove",
+      header: "",
+      align: "right",
+      render: (d) =>
+        TERMINAL.has(d.status) ? (
+          <button
+            type="button"
+            className="text-sm text-rose-600 hover:underline disabled:opacity-50"
+            disabled={deleting}
+            onClick={() => void removeDesigns([d.id])}
+          >
+            Remove
+          </button>
+        ) : null,
+    },
   ];
 
   return (
@@ -120,17 +200,28 @@ export function DesignDashboard({ strategy = "ga" }: { strategy?: DesignStrategy
         )}
       </Card>
 
-      <Card title={isAS ? "AutoScientist runs" : "Design runs"}>
+      <Card
+        title={isAS ? "AutoScientist runs" : "Design runs"}
+        actions={
+          selected.size > 0 ? (
+            <button
+              type="button"
+              className="rounded-md bg-rose-600 px-3 py-1 text-xs font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+              disabled={deleting}
+              onClick={() => void removeDesigns([...selected])}
+            >
+              {deleting ? "Deleting…" : `Delete selected (${selected.size})`}
+            </button>
+          ) : undefined
+        }
+      >
         {jobs === null ? (
           <Spinner label="Loading design runs…" />
-        ) : (() => {
-          const rows = jobs.filter((d) => (d.strategy ?? "ga") === strategy);
-          return rows.length === 0 ? (
-            <EmptyState>No {isAS ? "AutoScientist" : "design"} runs yet. Start one above.</EmptyState>
-          ) : (
-            <DataTable columns={columns} rows={rows} rowKey={(d) => d.id} />
-          );
-        })()}
+        ) : rows.length === 0 ? (
+          <EmptyState>No {isAS ? "AutoScientist" : "design"} runs yet. Start one above.</EmptyState>
+        ) : (
+          <DataTable columns={columns} rows={rows} rowKey={(d) => d.id} />
+        )}
       </Card>
     </div>
   );

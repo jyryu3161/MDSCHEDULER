@@ -148,12 +148,15 @@ def seed_gpus(db: Session) -> None:
                     "GPU %d moved %s->%s while running_count=%d; drain it before reassigning pools "
                     "to avoid slot-count drift.", gid, old_pool, pool, row.running_count)
             row.pool = pool
-            if pool == GpuPool.MD:
-                if old_pool != GpuPool.MD:
-                    row.capacity = md_capacity     # freshly joined MD pool -> env default
-                # else keep row.capacity (runtime dashboard value)
-            else:
-                row.capacity = _capacity(pool)
+            # Preserve a GPU's runtime capacity (a dashboard change) across restart/reseed as long
+            # as it stays in the same pool — applies to BOTH the MD and the design pool so a
+            # per-GPU/per-pool concurrency change survives. Capacity is only (re)initialized to the
+            # pool default when a GPU freshly joins a pool; excluded GPUs are always capacity 1.
+            if pool == GpuPool.EXCLUDED:
+                row.capacity = 1
+            elif old_pool != pool:
+                row.capacity = _capacity(pool)     # freshly joined this pool -> env/default
+            # else: same pool as before -> keep row.capacity (runtime dashboard value)
             if pool == GpuPool.EXCLUDED and row.running_count == 0:
                 row.status = GpuStatusEnum.DISABLED
             elif row.status == GpuStatusEnum.DISABLED and pool != GpuPool.EXCLUDED and row.running_count == 0:
@@ -374,6 +377,27 @@ def set_pool_capacity(db: Session, pool: str, capacity: int) -> list[GpuStatus]:
         row.updated_at = utcnow()
     db.commit()
     return rows
+
+
+def set_gpu_capacity(db: Session, gpu_id: int, capacity: int) -> GpuStatus | None:
+    """Set ONE GPU's slot capacity (per-GPU parallel-run control; any pool).
+
+    Mirrors ``set_pool_capacity`` but scoped to a single device so an operator can tune individual
+    GPUs from the dashboard (e.g. give a stronger card more concurrent MD/design slots). Lowering
+    capacity never evicts running subjobs — the GPU simply stops accepting new claims until it
+    drains below the new limit. Returns the updated row, or None if the GPU doesn't exist.
+    """
+    cap = max(1, min(16, int(capacity)))
+    row = db.get(GpuStatus, gpu_id)
+    if row is None:
+        return None
+    row.capacity = cap
+    if row.status not in _BLOCKED_STATES:
+        row.status = GpuStatusEnum.BUSY if row.running_count >= cap else GpuStatusEnum.AVAILABLE
+    row.updated_at = utcnow()
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 class GpuBusyError(Exception):

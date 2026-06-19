@@ -102,6 +102,13 @@ def remove_upload_storage(upload_id: str) -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def remove_design_storage(design_id: str) -> None:
+    """Recursively delete a design run's artifact tree (storage/design/<id>). No-op if absent."""
+    d = storage_root() / "design" / design_id
+    if d.exists():
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def disk_usage_gb() -> tuple[float, float]:
     """Return (used_gb, total_gb) for the filesystem holding STORAGE_ROOT."""
     root = storage_root()

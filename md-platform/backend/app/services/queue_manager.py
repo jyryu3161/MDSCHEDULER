@@ -34,6 +34,11 @@ class QueueManager:
         self._backend = self._settings.resolved_queue_backend()
         self._executor: ThreadPoolExecutor | None = None
         self._design_executor: ThreadPoolExecutor | None = None
+        # Current worker-thread counts + executors retired by a runtime grow (kept referenced so
+        # they drain their in-flight/queued work instead of being GC'd mid-task).
+        self._md_workers = 0
+        self._design_workers = 0
+        self._retired_executors: list[ThreadPoolExecutor] = []
         self._rq_queue = None
         self._lock = threading.Lock()
         self._init_backend()
@@ -54,20 +59,80 @@ class QueueManager:
                 self._backend = "local"
 
         if self._backend == "local":
-            # The MD executor gets EXACTLY one worker per MD-pool slot (GPUs in the MD pool ×
-            # parallel-MD concurrency). It must NOT exceed the MD GPU-slot count: an extra worker
-            # would start an MD subjob that can't get a GPU lock and would then run lock-free
-            # (CPU / unlocked GPU) per the runner's fallback, over-subscribing the GPU. Design
-            # orchestrators run on a SEPARATE executor (below) so they never consume MD worker
-            # slots (which would both starve MD and inflate effective MD concurrency).
-            pools = self._settings.resolved_gpu_pools()
-            md_gpus = sum(1 for p in pools.values() if p == "md") or 1
-            design_gpus = sum(1 for p in pools.values() if p == "design")
-            md_slots = md_gpus * self._settings.resolved_md_concurrency()
-            self._executor = ThreadPoolExecutor(max_workers=max(1, md_slots), thread_name_prefix="md-local")
-            # Dedicated design pool: one worker per design GPU (>=1). enqueue_design() targets this.
+            # The MD executor gets EXACTLY one worker per MD-pool GPU slot (sum of the MD GPUs'
+            # capacities). It must NOT exceed the slot count: an extra worker would start a subjob
+            # that can't get a GPU lock — a real-GROMACS job then queues in _acquire_gpu (and would
+            # eventually fail), so excess work belongs in the executor's own queue, not as a spare
+            # worker. Sizing from the live DB capacities (not the static env default) means a
+            # dashboard concurrency change governs real parallelism; sync_capacity() grows the pool
+            # when capacity is raised at runtime. Design orchestrators run on a SEPARATE executor so
+            # they never consume MD worker slots (which would starve MD and inflate its concurrency).
+            md_workers, design_workers = self._desired_workers()
+            self._md_workers = md_workers
+            self._design_workers = design_workers
+            self._executor = ThreadPoolExecutor(max_workers=md_workers, thread_name_prefix="md-local")
+            # Dedicated design pool: one worker per design GPU slot (>=1). enqueue_design() targets this.
             self._design_executor = ThreadPoolExecutor(
-                max_workers=max(1, design_gpus), thread_name_prefix="design")
+                max_workers=design_workers, thread_name_prefix="design")
+
+    def _desired_workers(self) -> tuple[int, int]:
+        """(md_workers, design_workers) sized to the *current* total GPU-pool slot capacity.
+
+        One worker per GPU slot, so request_gpu stays the authoritative concurrency gate and excess
+        subjobs wait in the executor's own queue. Reads the live per-GPU capacities from the DB so a
+        dashboard change drives real parallelism; falls back to the env-configured pool layout before
+        the GPU table is seeded (or if the query fails). Both counts are floored at 1 so the executors
+        always have a worker (a design job submitted with no design GPU still runs CPU/mock)."""
+        md = design = 0
+        try:
+            from sqlalchemy import func, select
+
+            from ..database import SessionLocal
+            from ..models import GpuPool, GpuStatus
+            db = SessionLocal()
+            try:
+                rows = db.execute(
+                    select(GpuStatus.pool, func.coalesce(func.sum(GpuStatus.capacity), 0))
+                    .group_by(GpuStatus.pool)
+                ).all()
+                by_pool = {p: int(c) for p, c in rows}
+                md = by_pool.get(GpuPool.MD, 0)
+                design = by_pool.get(GpuPool.DESIGN, 0)
+            finally:
+                db.close()
+        except Exception:  # noqa: BLE001 — DB not ready yet; use the env fallback below
+            md = design = 0
+        if md <= 0 or design <= 0:
+            pools = self._settings.resolved_gpu_pools()
+            if md <= 0:
+                md_gpus = sum(1 for p in pools.values() if p == "md") or 1
+                md = md_gpus * self._settings.resolved_md_concurrency()
+            if design <= 0:
+                design = sum(1 for p in pools.values() if p == "design")
+        return max(1, md), max(1, design)
+
+    def sync_capacity(self) -> None:
+        """Resize the local executors to match current DB GPU-pool capacities after a dashboard
+        capacity change. ThreadPoolExecutor can't shrink live, so this only GROWS: a capacity
+        *increase* gets more worker threads immediately (new submissions use the larger pool; the
+        retired smaller pool drains its in-flight/queued work). A capacity *decrease* takes effect
+        immediately for scheduling via request_gpu's slot gate; the surplus idle worker threads are
+        reclaimed on the next restart. No-op in RQ mode."""
+        if self._backend != "local":
+            return
+        with self._lock:
+            md_workers, design_workers = self._desired_workers()
+            if self._executor is not None and md_workers > self._md_workers:
+                self._executor.shutdown(wait=False, cancel_futures=False)
+                self._retired_executors.append(self._executor)
+                self._executor = ThreadPoolExecutor(max_workers=md_workers, thread_name_prefix="md-local")
+                self._md_workers = md_workers
+            if self._design_executor is not None and design_workers > self._design_workers:
+                self._design_executor.shutdown(wait=False, cancel_futures=False)
+                self._retired_executors.append(self._design_executor)
+                self._design_executor = ThreadPoolExecutor(
+                    max_workers=design_workers, thread_name_prefix="design")
+                self._design_workers = design_workers
 
     @property
     def backend(self) -> str:
@@ -85,9 +150,11 @@ class QueueManager:
                 result_ttl=86400,
             )
             return
-        # local
-        assert self._executor is not None
-        self._executor.submit(self._run_local, subjob_id)
+        # local — submit under the lock so a concurrent sync_capacity() resize can't swap/shutdown
+        # the executor between our read and our submit (which would raise and drop the subjob).
+        with self._lock:
+            assert self._executor is not None
+            self._executor.submit(self._run_local, subjob_id)
 
     def enqueue_design(self, design_id: str) -> None:
         """Run a peptide-design job in-process on the DESIGN executor (never the MD executor), so
@@ -95,12 +162,13 @@ class QueueManager:
         created in _init_backend (one worker per design GPU); in RQ mode it is lazily created as a
         single-worker pool so design never blocks the MD queue."""
         # Lazily create the design executor under the lock (double-checked) if it doesn't exist
-        # yet (RQ mode) so concurrent requests can't each build one and break serialization.
-        if self._design_executor is None:
-            with self._lock:
-                if self._design_executor is None:
-                    self._design_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="design")
-        self._design_executor.submit(self._run_design_local, design_id)
+        # yet (RQ mode) so concurrent requests can't each build one and break serialization. Submit
+        # under the same lock so a concurrent sync_capacity() resize can't swap/shutdown it between
+        # our read and our submit (which would raise and drop the design job).
+        with self._lock:
+            if self._design_executor is None:
+                self._design_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="design")
+            self._design_executor.submit(self._run_design_local, design_id)
 
     def _run_design_local(self, design_id: str) -> None:
         from .design_service import run_design_job
@@ -239,10 +307,9 @@ class QueueManager:
             db.close()
 
     def shutdown(self) -> None:
-        if self._executor is not None:
-            self._executor.shutdown(wait=False, cancel_futures=False)
-        if self._design_executor is not None:
-            self._design_executor.shutdown(wait=False, cancel_futures=False)
+        for ex in (self._executor, self._design_executor, *self._retired_executors):
+            if ex is not None:
+                ex.shutdown(wait=False, cancel_futures=False)
 
 
 # Process-global manager, lazily created.

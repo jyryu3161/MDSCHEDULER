@@ -159,6 +159,30 @@ def test_runtime_concurrency_change_and_survives_reseed():
     assert all(r.capacity == 3 for r in G.list_gpus(db) if r.pool == GpuPool.MD)
 
 
+def test_set_gpu_capacity_single_device():
+    db = _fresh_db()
+    # Raise only GPU 0's capacity; the other MD GPU is untouched (per-GPU control).
+    row = G.set_gpu_capacity(db, 0, 5)
+    assert row is not None and row.capacity == 5
+    rows = {r.gpu_id: r for r in G.list_gpus(db)}
+    assert rows[0].capacity == 5
+    assert rows[1].capacity == 2          # GPU 1 unchanged
+    # Clamped to [1, 16]; unknown GPU -> None.
+    assert G.set_gpu_capacity(db, 0, 0).capacity == 1
+    assert G.set_gpu_capacity(db, 0, 999).capacity == 16
+    assert G.set_gpu_capacity(db, 999, 4) is None
+
+
+def test_design_capacity_survives_reseed():
+    db = _fresh_db()
+    # A per-GPU capacity change on a DESIGN GPU must persist across restart/reseed (not be forced
+    # back to 1), mirroring the MD-pool behavior.
+    G.set_gpu_capacity(db, 2, 3)          # GPU 2 is the design GPU
+    assert next(r for r in G.list_gpus(db) if r.gpu_id == 2).capacity == 3
+    G.seed_gpus(db)                       # simulate restart
+    assert next(r for r in G.list_gpus(db) if r.gpu_id == 2).capacity == 3
+
+
 def test_capacity_lowered_below_running_count_stays_full():
     db = _fresh_db()
     # Fill BOTH MD GPUs to capacity 2 (4 claims spread 2+2 deterministically by least-loaded).

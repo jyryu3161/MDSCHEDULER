@@ -249,6 +249,10 @@ export const gpuApi = {
     const { data } = await http.patch<GpuStatus[]>("/gpus/concurrency", { pool, concurrency });
     return data;
   },
+  async setGpuCapacity(gpuId: number, capacity: number): Promise<GpuStatus> {
+    const { data } = await http.patch<GpuStatus>(`/gpus/${gpuId}/capacity`, { capacity });
+    return data;
+  },
   async setPool(gpuId: number, pool: "md" | "design" | "excluded"): Promise<GpuStatus> {
     const { data } = await http.patch<GpuStatus>(`/gpus/${gpuId}/pool`, { pool });
     return data;
@@ -290,6 +294,9 @@ export const designApi = {
   async cancel(designId: string): Promise<DesignJob> {
     const { data } = await http.post<DesignJob>(`/design/${designId}/cancel`);
     return data;
+  },
+  async remove(designId: string): Promise<void> {
+    await http.delete(`/design/${designId}`);
   },
 };
 

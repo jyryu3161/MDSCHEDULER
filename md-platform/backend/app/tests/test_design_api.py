@@ -133,6 +133,42 @@ def test_cancel_design(client):
     assert c.status_code == 200 and c.json()["status"] == "cancelled"
 
 
+def test_delete_design_requires_terminal(client):
+    h = _auth(client)
+    r = client.post("/api/design", headers=h,
+                    data={"name": "delete me", "initial_sequences": "KCCIVYP", "smiles": "C"})
+    design_id = r.json()["id"]
+    # Seed a candidate so we can confirm children are removed too.
+    db = SessionLocal()
+    try:
+        db.add(DesignCandidate(design_job_id=design_id, generation=0, sequence="KCCIVYP",
+                               docking_score=-5.0, fitness=5.0, refined=False))
+        db.commit()
+    finally:
+        db.close()
+
+    # A queued (non-terminal) run cannot be deleted -> 409.
+    assert client.delete(f"/api/design/{design_id}", headers=h).status_code == 409
+
+    # Cancel makes it terminal; delete then succeeds and removes row + candidates.
+    assert client.post(f"/api/design/{design_id}/cancel", headers=h).status_code == 200
+    d = client.delete(f"/api/design/{design_id}", headers=h)
+    assert d.status_code == 200 and d.json()["ok"] is True
+    assert client.get(f"/api/design/{design_id}", headers=h).status_code == 404
+    db = SessionLocal()
+    try:
+        assert db.get(DesignJob, design_id) is None
+        assert db.query(DesignCandidate).filter(
+            DesignCandidate.design_job_id == design_id).count() == 0
+    finally:
+        db.close()
+
+
+def test_delete_design_unknown_404(client):
+    h = _auth(client)
+    assert client.delete("/api/design/design_99999999_999", headers=h).status_code == 404
+
+
 def test_eval_mode_and_dock_engine_round_trip(client):
     h = _auth(client)
     j = client.post("/api/design", headers=h, data={

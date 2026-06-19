@@ -14,6 +14,7 @@ from ..deps import get_current_user, require_admin
 from ..models import GpuPool, GpuStatusEnum, User
 from ..schemas import GpuStatusOut
 from ..services import gpu_manager
+from ..services.queue_manager import get_queue_manager
 
 router = APIRouter(prefix="/gpus", tags=["gpus"])
 
@@ -21,6 +22,10 @@ router = APIRouter(prefix="/gpus", tags=["gpus"])
 class ConcurrencyUpdate(BaseModel):
     pool: str = GpuPool.MD
     concurrency: int = Field(ge=1, le=16)
+
+
+class CapacityUpdate(BaseModel):
+    capacity: int = Field(ge=1, le=16)
 
 
 class PoolUpdate(BaseModel):
@@ -50,7 +55,30 @@ def set_concurrency(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail=f"pool must be one of: {GpuPool.MD}, {GpuPool.DESIGN}.")
     rows = gpu_manager.set_pool_capacity(db, body.pool, body.concurrency)
+    # Grow the in-process executor so the new concurrency takes effect immediately (not just on
+    # restart). request_gpu already gates new claims at the new capacity.
+    get_queue_manager().sync_capacity()
     return [GpuStatusOut.model_validate(r) for r in rows]
+
+
+@router.patch("/{gpu_id}/capacity", response_model=GpuStatusOut)
+def set_gpu_capacity(
+    gpu_id: int,
+    body: CapacityUpdate,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+) -> GpuStatusOut:
+    """Set how many subjobs may run concurrently on a SINGLE GPU (per-GPU parallel-run control).
+
+    Works for any pool (MD or design), so an operator can tune individual devices from the
+    dashboard. Takes effect immediately for new claims (running subjobs are never evicted); the
+    in-process executor is grown to match so the change governs real parallelism.
+    """
+    row = gpu_manager.set_gpu_capacity(db, gpu_id, body.capacity)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="GPU not found.")
+    get_queue_manager().sync_capacity()
+    return GpuStatusOut.model_validate(row)
 
 
 @router.patch("/{gpu_id}/pool", response_model=GpuStatusOut)

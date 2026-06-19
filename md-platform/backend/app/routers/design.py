@@ -20,15 +20,16 @@ from sqlalchemy.orm import Session
 from ..config import get_settings
 from ..database import get_db
 from ..deps import get_current_user
-from ..models import DesignCandidate, DesignJob, JobStatus, Role, User, utcnow
+from ..models import DesignCandidate, DesignJob, JobLog, JobStatus, Role, User, utcnow
 from ..schemas import (
     DesignCandidateOut,
     DesignGenerationPoint,
     DesignJobCreate,
     DesignJobDetail,
     DesignJobOut,
+    OkResponse,
 )
-from ..services import storage
+from ..services import gpu_manager, storage
 from ..services.queue_manager import get_queue_manager
 
 router = APIRouter(prefix="/design", tags=["design"])
@@ -216,3 +217,33 @@ def cancel_design(
     db.commit()
     db.refresh(dj)
     return DesignJobOut.model_validate(dj)
+
+
+@router.delete("/{design_id}", response_model=OkResponse)
+def delete_design(
+    design_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> OkResponse:
+    """Delete a finished design run: remove its candidates, logs, the row, and storage.
+
+    Only TERMINAL runs (completed/failed/cancelled) are deletable — deleting a live run would let
+    its still-running orchestrator thread write to a deleted row or share its GPU. To remove an
+    active run, cancel it first (it becomes terminal immediately), then delete. Mirrors the MD
+    "Finished jobs" deletion flow.
+    """
+    dj = _owned(db, design_id, user)
+    if dj.status not in JobStatus.TERMINAL_SET:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cancel the run before deleting it (only finished/cancelled runs can be removed).")
+    # The cancelled run's orchestrator already released its GPU on exit; release is idempotent, so
+    # this is a safe no-op belt-and-braces against a slot left reserved by a crashed worker.
+    gpu_manager.release_gpu(db, design_id)
+    db.query(DesignCandidate).filter(DesignCandidate.design_job_id == design_id).delete(
+        synchronize_session=False)
+    db.query(JobLog).filter(JobLog.job_id == design_id).delete(synchronize_session=False)
+    db.delete(dj)
+    db.commit()
+    storage.remove_design_storage(design_id)
+    return OkResponse(ok=True)

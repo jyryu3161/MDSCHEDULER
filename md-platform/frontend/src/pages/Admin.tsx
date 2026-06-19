@@ -139,6 +139,58 @@ function ReportSettingsCard() {
   );
 }
 
+/** Per-GPU concurrency (slot capacity) control — how many subjobs may run on this one GPU. Works
+ *  for both the MD and the design pool; lowering never evicts a running subjob (it drains first). */
+function GpuCapacityControl({
+  gpu,
+  busy,
+  onApply,
+}: {
+  gpu: GpuStatus;
+  busy: boolean;
+  onApply: (gpuId: number, capacity: number) => void;
+}) {
+  const [val, setVal] = useState(gpu.capacity);
+  // Follow server-pushed capacity changes (SSE/poll) unless the operator is mid-edit.
+  useEffect(() => {
+    setVal(gpu.capacity);
+  }, [gpu.capacity]);
+  const dirty = val !== gpu.capacity;
+  return (
+    <div className="mt-2 flex items-center gap-1.5 text-xs">
+      <label className="text-slate-600" htmlFor={`cap-${gpu.gpu_id}`}>
+        Jobs / GPU
+      </label>
+      <input
+        id={`cap-${gpu.gpu_id}`}
+        type="number"
+        min={1}
+        max={16}
+        step={1}
+        className="w-14 rounded-md border border-slate-300 px-2 py-1"
+        value={val}
+        disabled={busy}
+        aria-label={`Concurrent jobs for GPU ${gpu.gpu_id}`}
+        onChange={(e) =>
+          setVal(Math.max(1, Math.min(16, Math.floor(Number(e.target.value)) || 1)))
+        }
+      />
+      <button
+        type="button"
+        className="rounded-md bg-brand-600 px-2 py-1 font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+        disabled={busy || !dirty}
+        aria-label={`Apply concurrency for GPU ${gpu.gpu_id}`}
+        onClick={() => onApply(gpu.gpu_id, val)}
+      >
+        Apply
+      </button>
+      <span className="text-slate-400">
+        {gpu.running_count}/{gpu.capacity} in use
+      </span>
+    </div>
+  );
+}
+
 export function Admin() {
   const [gpus, setGpus] = useState<GpuStatus[]>([]);
   const [queue, setQueue] = useState<QueueResponse>({ items: [], running: [] });
@@ -254,6 +306,19 @@ export function Admin() {
       setMdConc(null);  // follow the freshly-applied capacity
     } catch (err) {
       setError(normalizeError(err).message);
+    }
+  };
+
+  const onSetGpuCapacity = async (gpuId: number, capacity: number) => {
+    setGpuBusy(gpuId);
+    setError(null);
+    try {
+      const updated = await gpuApi.setGpuCapacity(gpuId, capacity);
+      setGpus((prev) => prev.map((g) => (g.gpu_id === gpuId ? updated : g)));
+    } catch (err) {
+      setError(normalizeError(err).message);
+    } finally {
+      setGpuBusy(null);
     }
   };
 
@@ -568,6 +633,13 @@ export function Admin() {
                     Maintenance
                   </button>
                 </div>
+                {g.pool !== "excluded" && (
+                  <GpuCapacityControl
+                    gpu={g}
+                    busy={gpuBusy === g.gpu_id}
+                    onApply={onSetGpuCapacity}
+                  />
+                )}
               </div>
             ))}
           </div>
