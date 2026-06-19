@@ -1,8 +1,25 @@
-// Type shim for the prebuilt Plotly bundle. We import the dist-min build to keep
-// the bundle small and avoid pulling Plotly's full source through the TS layer.
-declare module "plotly.js-dist-min" {
+// Type shims for Plotly's modular CommonJS trace bundle.
+type PlotlyRegisterModule<T> = T extends readonly (infer U)[] ? U : T;
+type PlotlyModule = PlotlyRegisterModule<Parameters<typeof import("plotly.js").register>[0]>;
+
+declare module "plotly.js/lib/core" {
   const Plotly: typeof import("plotly.js");
   export default Plotly;
+}
+
+declare module "plotly.js/lib/scatter" {
+  const scatter: PlotlyModule;
+  export default scatter;
+}
+
+declare module "plotly.js/lib/bar" {
+  const bar: PlotlyModule;
+  export default bar;
+}
+
+declare module "plotly.js/lib/heatmap" {
+  const heatmap: PlotlyModule;
+  export default heatmap;
 }
 
 // @types/react-plotly.js declares the main entry but not the /factory subpath.

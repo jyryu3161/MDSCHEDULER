@@ -33,13 +33,22 @@ export default defineConfig(({ mode }) => {
       chunkSizeWarningLimit: 4000,
       rollupOptions: {
         output: {
-          // Split the heavy visualization libraries into their own cacheable
-          // vendor chunks so they are fetched lazily and cached independently
-          // of the app code, instead of one monolithic bundle.
-          manualChunks: {
-            plotly: ["plotly.js-dist-min", "react-plotly.js"],
-            ngl: ["ngl"],
-            "react-vendor": ["react", "react-dom", "react-router-dom"],
+          // Split heavy visualization libraries into cacheable lazy chunks. Use a function so deep
+          // Plotly modular imports (plotly.js/lib/*) stay grouped in the plotly chunk.
+          manualChunks(id) {
+            if (id.includes("/node_modules/plotly.js/") || id.includes("/node_modules/react-plotly.js/")) {
+              return "plotly";
+            }
+            if (id.includes("/node_modules/ngl/")) {
+              return "ngl";
+            }
+            if (
+              id.includes("/node_modules/react/") ||
+              id.includes("/node_modules/react-dom/") ||
+              id.includes("/node_modules/react-router-dom/")
+            ) {
+              return "react-vendor";
+            }
           },
         },
       },

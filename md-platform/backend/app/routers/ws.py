@@ -39,6 +39,8 @@ def _authenticate(token: str | None) -> tuple[int, str] | None:
         user = s.get(User, uid)
         if user is None or not user.is_active:
             return None
+        if user.must_change_password:
+            return None
         return (user.id, user.role)
 
 
@@ -68,7 +70,8 @@ def _job_payload(job_id: str) -> dict:
         j = s.get(Job, job_id)
         if j is None:
             return {"event": "job", "job_id": job_id, "status": "deleted"}
-        subs = s.query(SubJob).filter(SubJob.job_id == job_id).order_by(SubJob.pose_index).all()
+        subs = s.query(SubJob).filter(SubJob.job_id == job_id).order_by(
+            SubJob.pose_index, SubJob.replica_index).all()
         return {
             "event": "job",
             "job_id": j.id,
@@ -78,6 +81,7 @@ def _job_payload(job_id: str) -> dict:
                 {
                     "id": x.id,
                     "pose_index": x.pose_index,
+                    "replica_index": x.replica_index,
                     "status": x.status,
                     "progress": x.progress,
                     "current_step": x.current_step,

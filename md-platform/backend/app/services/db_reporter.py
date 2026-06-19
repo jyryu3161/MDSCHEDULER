@@ -62,7 +62,8 @@ class DbReporter:
         job = db.get(Job, job_id)
         if job is None:
             return
-        subjobs = db.query(SubJob).filter(SubJob.job_id == job_id).order_by(SubJob.pose_index).all()
+        subjobs = db.query(SubJob).filter(SubJob.job_id == job_id).order_by(
+            SubJob.pose_index, SubJob.replica_index).all()
         payload = {
             "job_id": job.id,
             "status": job.status,
@@ -71,6 +72,7 @@ class DbReporter:
                 {
                     "id": s.id,
                     "pose_index": s.pose_index,
+                    "replica_index": s.replica_index,
                     "status": s.status,
                     "progress": s.progress,
                     "current_step": s.current_step,

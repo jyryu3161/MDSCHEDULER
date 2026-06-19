@@ -291,6 +291,7 @@ export interface QueueItem {
   job_name: string;
   user: string;
   pose_index: number;
+  replica_index: number;
   status: JobStatus;
   queue_position: number | null;
   assigned_gpu: number | null;
@@ -370,6 +371,7 @@ export interface SubJobResult {
   id: string;
   job_id: string;
   pose_index: number;
+  replica_index: number;
   docking_score: number;
   status: JobStatus;
   analysis_summary: AnalysisSummary | null;

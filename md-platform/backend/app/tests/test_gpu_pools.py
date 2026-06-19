@@ -221,6 +221,9 @@ def test_release_legacy_marker_path():
     assert gid is not None
     row = next(r for r in G.list_gpus(db) if r.gpu_id == gid)
     assert row.running_count == 1 and row.assigned_subjob_id == "no-such-subjob"
+    assert G.request_gpu(db, "no-such-subjob", pool=GpuPool.MD) == gid
+    row = next(r for r in G.list_gpus(db) if r.gpu_id == gid)
+    assert row.running_count == 1
     assert G.release_gpu(db, "no-such-subjob") is True       # legacy decrement
     assert G.release_gpu(db, "no-such-subjob") is False      # no double-free
     row = next(r for r in G.list_gpus(db) if r.gpu_id == gid)

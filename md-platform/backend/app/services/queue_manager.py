@@ -1,7 +1,7 @@
 """Queue manager — enqueue subjobs to RQ or an in-process ThreadPoolExecutor.
 
 CONTRACT §5 enqueue contract:
-  - rq mode    : rq.Queue.enqueue('mdworker.tasks.run_subjob_task', subjob_id)
+  - rq mode    : rq.Queue.enqueue('mdworker.tasks.run_subjob_task', subjob_id, settings)
   - local mode : ThreadPoolExecutor(max_workers=#GPUs) calling
                  mdworker.pipeline.runner.run_subjob(subjob_id,
                      reporter=DbReporter(SessionLocal), settings=...)
@@ -40,6 +40,7 @@ class QueueManager:
         self._design_workers = 0
         self._retired_executors: list[ThreadPoolExecutor] = []
         self._rq_queue = None
+        self._design_queue = None
         self._lock = threading.Lock()
         self._init_backend()
 
@@ -54,6 +55,7 @@ class QueueManager:
                 conn = redis.Redis.from_url(self._settings.REDIS_URL)
                 conn.ping()
                 self._rq_queue = Queue("md", connection=conn)
+                self._design_queue = Queue("design", connection=conn)
             except Exception:
                 # Redis became unreachable between resolution and setup: degrade to local.
                 self._backend = "local"
@@ -146,6 +148,7 @@ class QueueManager:
             self._rq_queue.enqueue(
                 "mdworker.tasks.run_subjob_task",
                 subjob_id,
+                self._runner_settings(),
                 job_timeout="24h",
                 result_ttl=86400,
             )
@@ -157,14 +160,29 @@ class QueueManager:
             self._executor.submit(self._run_local, subjob_id)
 
     def enqueue_design(self, design_id: str) -> None:
-        """Run a peptide-design job in-process on the DESIGN executor (never the MD executor), so
-        design orchestrators never consume MD worker slots. In local mode the design executor is
-        created in _init_backend (one worker per design GPU); in RQ mode it is lazily created as a
-        single-worker pool so design never blocks the MD queue."""
+        """Enqueue a peptide-design job.
+
+        RQ mode sends the task to the worker image (scientific toolchain + GPU runtime). Local mode
+        keeps using the backend's dedicated DESIGN executor, so design orchestrators never consume MD
+        worker slots.
+        """
+        if self._backend == "rq" and self._design_queue is not None:
+            from .design_service import design_task_payload
+
+            config, settings_payload = design_task_payload(design_id)
+            self._design_queue.enqueue(
+                "mdworker.tasks.run_design_task",
+                design_id,
+                config,
+                settings_payload,
+                job_timeout="72h",
+                result_ttl=86400,
+            )
+            return
         # Lazily create the design executor under the lock (double-checked) if it doesn't exist
-        # yet (RQ mode) so concurrent requests can't each build one and break serialization. Submit
-        # under the same lock so a concurrent sync_capacity() resize can't swap/shutdown it between
-        # our read and our submit (which would raise and drop the design job).
+        # yet, then submit under the same lock so a concurrent sync_capacity() resize can't
+        # swap/shutdown it between our read and our submit (which would raise and drop the design
+        # job).
         with self._lock:
             if self._design_executor is None:
                 self._design_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="design")

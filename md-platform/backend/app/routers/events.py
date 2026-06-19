@@ -42,6 +42,11 @@ def _user_from_token(token: str | None, db: Session) -> User:
     user = db.get(User, uid_int)
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive.")
+    if user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password change required before using the API.",
+        )
     return user
 
 
@@ -108,7 +113,8 @@ async def job_events(
                 return {"job_id": jid, "status": "deleted"}
             from ..models import SubJob
 
-            subs = s.query(SubJob).filter(SubJob.job_id == jid).order_by(SubJob.pose_index).all()
+            subs = s.query(SubJob).filter(SubJob.job_id == jid).order_by(
+                SubJob.pose_index, SubJob.replica_index).all()
             return {
                 "job_id": j.id,
                 "status": j.status,
@@ -117,6 +123,7 @@ async def job_events(
                     {
                         "id": x.id,
                         "pose_index": x.pose_index,
+                        "replica_index": x.replica_index,
                         "status": x.status,
                         "progress": x.progress,
                         "current_step": x.current_step,

@@ -133,6 +133,7 @@ async def lifespan(app: FastAPI):
         for t in tasks:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await t
+        realtime.set_main_loop(None)
         from .services.queue_manager import get_queue_manager
 
         with contextlib.suppress(Exception):

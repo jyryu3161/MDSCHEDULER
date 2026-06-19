@@ -103,3 +103,17 @@ def run_design_job(design_id: str) -> None:
     except Exception as exc:  # noqa: BLE001 — runner sets terminal status; this is a backstop
         reporter.set_status(design_id, JobStatus.FAILED, error_message=str(exc))
         reporter.log(design_id, "error", "design", f"Design execution error: {exc}")
+
+
+def design_task_payload(design_id: str) -> tuple[dict, dict]:
+    """Return the serializable config/settings payload for an RQ design worker task."""
+    db = SessionLocal()
+    try:
+        dj = db.get(DesignJob, design_id)
+        if dj is None:
+            raise ValueError(f"Design job not found: {design_id}")
+        config = _design_config(dj)
+        settings = _runner_settings(dj)
+        return config, settings
+    finally:
+        db.close()

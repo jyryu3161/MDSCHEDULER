@@ -269,6 +269,7 @@ class QueueItem(BaseModel):
     job_name: str
     user: str
     pose_index: int
+    replica_index: int = 1
     status: str
     queue_position: int | None = None
     assigned_gpu: int | None = None
@@ -321,6 +322,7 @@ class SubJobResult(BaseModel):
     id: str
     job_id: str
     pose_index: int
+    replica_index: int = 1
     docking_score: float
     status: str
     progress: float
@@ -524,6 +526,7 @@ class InternalGpuAssign(BaseModel):
 
 class InternalGpuRequest(BaseModel):
     subjob_id: str
+    pool: Literal["md", "design"] = "md"
 
 
 class InternalGpuRequestResponse(BaseModel):
@@ -532,3 +535,26 @@ class InternalGpuRequestResponse(BaseModel):
 
 class InternalGpuReleaseRequest(BaseModel):
     subjob_id: str
+
+
+class InternalDesignStatus(BaseModel):
+    status: str
+    error_message: str | None = None
+    current_generation: int | None = None
+
+
+class InternalDesignProgress(BaseModel):
+    progress: float
+    current_generation: int | None = None
+
+
+class InternalDesignCandidates(BaseModel):
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class InternalDesignResult(BaseModel):
+    best_sequence: str | None = None
+    best_fitness: float | None = None
+    best_docking_score: float | None = None
+    best_md_dg: float | None = None
+    result_path: str

@@ -50,6 +50,12 @@ function isScalar(value: unknown): boolean {
   return value == null || typeof value !== "object";
 }
 
+function poseLabel(subjob: Pick<SubJobResult, "pose_index" | "replica_index">, multiReplica: boolean): string {
+  return multiReplica
+    ? `Pose ${subjob.pose_index} · rep ${subjob.replica_index}`
+    : `Pose ${subjob.pose_index}`;
+}
+
 export function Results() {
   const { jobId = "" } = useParams<{ jobId: string }>();
   const [params, setParams] = useSearchParams();
@@ -81,7 +87,7 @@ export function Results() {
     () =>
       (results?.subjobs ?? [])
         .filter((s) => s.status === "completed")
-        .sort((a, b) => a.pose_index - b.pose_index),
+        .sort((a, b) => a.pose_index - b.pose_index || a.replica_index - b.replica_index),
     [results],
   );
 
@@ -149,6 +155,7 @@ export function Results() {
   }
 
   const { job } = results;
+  const multiReplica = (job.n_replicas ?? 1) > 1;
 
   return (
     <div className="space-y-6">
@@ -204,7 +211,7 @@ export function Results() {
                     ].join(" ")}
                     aria-pressed={active}
                   >
-                    Pose {s.pose_index}
+                    {poseLabel(s, multiReplica)}
                     <span className="ml-2 text-xs text-slate-400">
                       {formatScore(s.docking_score)} kcal/mol
                     </span>
@@ -219,6 +226,7 @@ export function Results() {
             <PoseResults
               jobId={job.id}
               subjob={selected}
+              multiReplica={multiReplica}
               downloadBusy={downloadBusy === selected.id}
               onDownload={() => onDownloadPose(selected.id)}
             />
@@ -239,11 +247,13 @@ export function Results() {
 function PoseResults({
   jobId,
   subjob,
+  multiReplica,
   downloadBusy,
   onDownload,
 }: {
   jobId: string;
   subjob: SubJobResult;
+  multiReplica: boolean;
   downloadBusy: boolean;
   onDownload: () => void;
 }) {
@@ -288,7 +298,7 @@ function PoseResults({
 
   return (
     <Card
-      title={`Pose ${subjob.pose_index}`}
+      title={poseLabel(subjob, multiReplica)}
       actions={
         <button
           type="button"
@@ -625,7 +635,7 @@ function PoseComparison({
             className="font-medium text-brand-700 hover:underline"
             to={`/jobs/${jobId}/results?subjob_id=${encodeURIComponent(s.id)}`}
           >
-            Pose {s.pose_index}
+            {poseLabel(s, subjobs.some((sj) => sj.replica_index > 1))}
           </Link>
         ),
       },
@@ -646,7 +656,7 @@ function PoseComparison({
       });
     }
     return cols;
-  }, [jobId, summaryKeys]);
+  }, [jobId, subjobs, summaryKeys]);
 
   return (
     <Card title="Pose comparison">

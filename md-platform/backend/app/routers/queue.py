@@ -41,8 +41,10 @@ def build_queue_snapshot(db: Session, viewer_id: int | None = None, is_admin: bo
         else:
             running.append((sj, job, user))
 
-    pending.sort(key=lambda t: (Priority.ORDER.get(t[1].priority, 1), t[1].created_at, t[0].pose_index))
-    running.sort(key=lambda t: (t[0].assigned_gpu if t[0].assigned_gpu is not None else 1 << 30, t[0].pose_index))
+    pending.sort(key=lambda t: (
+        Priority.ORDER.get(t[1].priority, 1), t[1].created_at, t[0].pose_index, t[0].replica_index))
+    running.sort(key=lambda t: (
+        t[0].assigned_gpu if t[0].assigned_gpu is not None else 1 << 30, t[0].pose_index, t[0].replica_index))
 
     def to_item(sj: SubJob, job: Job, user: User, position: int | None) -> QueueItem:
         return QueueItem(
@@ -51,6 +53,7 @@ def build_queue_snapshot(db: Session, viewer_id: int | None = None, is_admin: bo
             job_name=job.name,
             user=user.username,
             pose_index=sj.pose_index,
+            replica_index=sj.replica_index,
             status=sj.status,
             queue_position=position,
             assigned_gpu=sj.assigned_gpu,

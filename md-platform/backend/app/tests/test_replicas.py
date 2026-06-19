@@ -151,6 +151,8 @@ def test_subjob_result_uses_subjob_replica():
 
     r1 = R._subjob_result(job_id, _sj(1))
     r2 = R._subjob_result(job_id, _sj(2))
+    assert r1.replica_index == 1
+    assert r2.replica_index == 2
     assert r1.mmpbsa["gbsa_dg_kcal_mol"] == -11.0
     assert r2.mmpbsa["gbsa_dg_kcal_mol"] == -22.0   # replica 2 served its own data, not replica 1
 

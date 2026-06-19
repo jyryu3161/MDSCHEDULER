@@ -127,6 +127,16 @@ def test_must_change_password_blocks_api_until_changed(client):
     assert client.get("/api/jobs", headers=_auth(tok2)).status_code == 200
 
 
+def test_must_change_password_blocks_realtime_auth(client):
+    _create_user("rtlock", "initpass1", role="user", must_change=True)
+    tok = client.post("/api/auth/login", json={"username": "rtlock", "password": "initpass1"}).json()["access_token"]
+    h = _auth(tok)
+    assert client.get("/api/events/dashboard", headers=h).status_code == 403
+
+    from app.routers import ws
+    assert ws._authenticate(tok) is None
+
+
 def _create_user(username: str, password: str, role: str = "user", must_change: bool = True) -> None:
     """Insert a fresh user directly so the change-password test does not mutate the
     shared seeded admin (keeping tests order-independent). ``must_change`` controls the
@@ -208,6 +218,71 @@ def test_dashboard_summary(client, admin_token):
         "storage_total_gb",
     ):
         assert key in body
+
+
+def test_dashboard_summary_scopes_job_counts_to_user(client):
+    import uuid
+
+    from app.database import session_scope
+    from app.models import InputType, Job, JobStatus, LigandType, User
+
+    suffix = uuid.uuid4().hex[:8]
+    username = f"dash_{suffix}"
+    other_username = f"dash_other_{suffix}"
+    _create_user(username, "dashpass-1", must_change=False)
+    _create_user(other_username, "dashpass-1", must_change=False)
+
+    with session_scope() as s:
+        user = s.query(User).filter_by(username=username).one()
+        other = s.query(User).filter_by(username=other_username).one()
+        s.add_all(
+            [
+                Job(
+                    id=f"{username}_queued",
+                    user_id=user.id,
+                    name="queued",
+                    input_type=InputType.PDB,
+                    ligand_type=LigandType.PEPTIDE,
+                    status=JobStatus.QUEUED,
+                ),
+                Job(
+                    id=f"{username}_running",
+                    user_id=user.id,
+                    name="running",
+                    input_type=InputType.PDB,
+                    ligand_type=LigandType.PEPTIDE,
+                    status=JobStatus.RUNNING_MD,
+                ),
+                Job(
+                    id=f"{username}_completed",
+                    user_id=user.id,
+                    name="completed",
+                    input_type=InputType.PDB,
+                    ligand_type=LigandType.PEPTIDE,
+                    status=JobStatus.COMPLETED,
+                ),
+                Job(
+                    id=f"{other_username}_failed",
+                    user_id=other.id,
+                    name="failed",
+                    input_type=InputType.PDB,
+                    ligand_type=LigandType.PEPTIDE,
+                    status=JobStatus.FAILED,
+                ),
+            ]
+        )
+        s.commit()
+
+    login = client.post("/api/auth/login", json={"username": username, "password": "dashpass-1"})
+    assert login.status_code == 200, login.text
+    resp = client.get("/api/dashboard/summary", headers=_auth(login.json()["access_token"]))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_jobs"] == 3
+    assert body["queued_jobs"] == 1
+    assert body["running_jobs"] == 1
+    assert body["completed_jobs"] == 1
+    assert body["failed_jobs"] == 0
 
 
 def test_gpus_list(client, admin_token):

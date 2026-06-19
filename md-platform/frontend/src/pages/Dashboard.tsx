@@ -210,7 +210,9 @@ export function Dashboard() {
       render: (q) => (
         <Link className="font-medium text-brand-700 hover:underline" to={`/jobs/${q.job_id}`}>
           {q.job_name}
-          <span className="ml-1 text-slate-400">· pose {q.pose_index}</span>
+          <span className="ml-1 text-slate-400">
+            · pose {q.pose_index}{q.replica_index > 1 ? ` · rep ${q.replica_index}` : ""}
+          </span>
         </Link>
       ),
     },
@@ -237,7 +239,9 @@ export function Dashboard() {
       render: (q) => (
         <Link className="font-medium text-brand-700 hover:underline" to={`/jobs/${q.job_id}`}>
           {q.job_name}
-          <span className="ml-1 text-slate-400">· pose {q.pose_index}</span>
+          <span className="ml-1 text-slate-400">
+            · pose {q.pose_index}{q.replica_index > 1 ? ` · rep ${q.replica_index}` : ""}
+          </span>
         </Link>
       ),
     },

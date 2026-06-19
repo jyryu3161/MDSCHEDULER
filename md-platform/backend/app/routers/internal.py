@@ -15,10 +15,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from .. import realtime
-from ..database import get_db
+from ..database import SessionLocal, get_db
 from ..deps import verify_internal_token
-from ..models import Job, JobLog, JobStatus, SubJob, utcnow
+from ..models import DesignJob, Job, JobLog, JobStatus, SubJob, utcnow
 from ..schemas import (
+    InternalDesignCandidates,
+    InternalDesignProgress,
+    InternalDesignResult,
+    InternalDesignStatus,
     InternalGpuAssign,
     InternalGpuReleaseRequest,
     InternalGpuRequest,
@@ -29,6 +33,7 @@ from ..schemas import (
     OkResponse,
 )
 from ..services import gpu_manager
+from ..services.design_reporter import DesignReporter
 
 router = APIRouter(prefix="/internal", tags=["internal"], dependencies=[Depends(verify_internal_token)])
 
@@ -37,7 +42,8 @@ def _publish_job(db: Session, job_id: str) -> None:
     job = db.get(Job, job_id)
     if job is None:
         return
-    subs = db.query(SubJob).filter(SubJob.job_id == job_id).order_by(SubJob.pose_index).all()
+    subs = db.query(SubJob).filter(SubJob.job_id == job_id).order_by(
+        SubJob.pose_index, SubJob.replica_index).all()
     realtime.publish_from_thread(
         realtime.job_topic(job_id),
         {
@@ -48,6 +54,7 @@ def _publish_job(db: Session, job_id: str) -> None:
                 {
                     "id": s.id,
                     "pose_index": s.pose_index,
+                    "replica_index": s.replica_index,
                     "status": s.status,
                     "progress": s.progress,
                     "current_step": s.current_step,
@@ -175,6 +182,77 @@ def add_log(body: InternalLog, db: Session = Depends(get_db)) -> OkResponse:
     return OkResponse(ok=True)
 
 
+def _require_design(db: Session, design_id: str) -> None:
+    if db.get(DesignJob, design_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Design job not found.")
+
+
+@router.post("/design/{design_id}/status", response_model=OkResponse)
+def update_design_status(
+    design_id: str,
+    body: InternalDesignStatus,
+    db: Session = Depends(get_db),
+) -> OkResponse:
+    _require_design(db, design_id)
+    DesignReporter(SessionLocal).set_status(
+        design_id,
+        body.status,
+        error_message=body.error_message,
+        current_generation=body.current_generation,
+    )
+    return OkResponse(ok=True)
+
+
+@router.post("/design/{design_id}/progress", response_model=OkResponse)
+def update_design_progress(
+    design_id: str,
+    body: InternalDesignProgress,
+    db: Session = Depends(get_db),
+) -> OkResponse:
+    _require_design(db, design_id)
+    DesignReporter(SessionLocal).set_progress(
+        design_id,
+        body.progress,
+        current_generation=body.current_generation,
+    )
+    return OkResponse(ok=True)
+
+
+@router.post("/design/{design_id}/candidates", response_model=OkResponse)
+def record_design_candidates(
+    design_id: str,
+    body: InternalDesignCandidates,
+    db: Session = Depends(get_db),
+) -> OkResponse:
+    _require_design(db, design_id)
+    DesignReporter(SessionLocal).record_candidates(design_id, body.rows)
+    return OkResponse(ok=True)
+
+
+@router.post("/design/{design_id}/result", response_model=OkResponse)
+def update_design_result(
+    design_id: str,
+    body: InternalDesignResult,
+    db: Session = Depends(get_db),
+) -> OkResponse:
+    _require_design(db, design_id)
+    DesignReporter(SessionLocal).set_result(
+        design_id,
+        best_sequence=body.best_sequence,
+        best_fitness=float(body.best_fitness or 0.0),
+        best_docking_score=body.best_docking_score,
+        best_md_dg=body.best_md_dg,
+        result_path=body.result_path,
+    )
+    return OkResponse(ok=True)
+
+
+@router.get("/design/{design_id}/cancelled")
+def design_cancelled(design_id: str, db: Session = Depends(get_db)) -> dict:
+    dj = db.get(DesignJob, design_id)
+    return {"cancelled": bool(dj is not None and dj.status == JobStatus.CANCELLED)}
+
+
 @router.post("/gpus/{gpu_id}/assign", response_model=OkResponse)
 def assign_gpu(
     gpu_id: int,
@@ -193,7 +271,7 @@ def request_gpu(
     body: InternalGpuRequest,
     db: Session = Depends(get_db),
 ) -> InternalGpuRequestResponse:
-    gpu_id = gpu_manager.request_gpu(db, body.subjob_id)
+    gpu_id = gpu_manager.request_gpu(db, body.subjob_id, pool=body.pool)
     if gpu_id is not None:
         realtime.publish_from_thread(realtime.dashboard_topic(), {"trigger": "gpu_update", "gpu_id": gpu_id})
     return InternalGpuRequestResponse(gpu_id=gpu_id)

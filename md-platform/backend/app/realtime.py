@@ -51,11 +51,13 @@ class EventBus:
 
     def publish_threadsafe(self, loop: asyncio.AbstractEventLoop | None, topic: str, payload: dict[str, Any]) -> None:
         """Publish from a non-async thread (e.g. the LocalExecutor worker thread)."""
-        if loop is None or loop.is_closed():
+        if loop is None or loop.is_closed() or not loop.is_running():
             return
+        coro = self.publish(topic, payload)
         try:
-            asyncio.run_coroutine_threadsafe(self.publish(topic, payload), loop)
+            asyncio.run_coroutine_threadsafe(coro, loop)
         except RuntimeError:
+            coro.close()
             pass
 
 
@@ -64,7 +66,7 @@ bus = EventBus()
 _main_loop: asyncio.AbstractEventLoop | None = None
 
 
-def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
+def set_main_loop(loop: asyncio.AbstractEventLoop | None) -> None:
     global _main_loop
     _main_loop = loop
 

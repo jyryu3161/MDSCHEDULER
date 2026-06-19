@@ -229,6 +229,12 @@ def request_gpu(db: Session, subjob_id: str, pool: str = GpuPool.MD) -> int | No
     sub = db.get(SubJob, subjob_id)
     if sub is not None and sub.assigned_gpu is not None:
         return sub.assigned_gpu
+    if sub is None:
+        legacy_gid = db.execute(
+            select(GpuStatus.gpu_id).where(GpuStatus.assigned_subjob_id == subjob_id)
+        ).scalar_one_or_none()
+        if legacy_gid is not None:
+            return legacy_gid
 
     max_attempts = max(1, int(
         db.execute(select(func.count()).select_from(GpuStatus).where(GpuStatus.pool == pool)).scalar_one() or 0

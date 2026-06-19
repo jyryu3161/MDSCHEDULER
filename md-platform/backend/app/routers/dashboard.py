@@ -21,31 +21,24 @@ def build_summary(db: Session, viewer_id: int | None = None, is_admin: bool = Fa
     # GPU + storage are shared infrastructure status and stay global for everyone.
     scope_uid = viewer_id if (viewer_id is not None and not is_admin) else None
 
-    def count_jobs(*statuses: str) -> int:
-        q = select(func.count()).select_from(Job).where(Job.status.in_(statuses))
-        if scope_uid is not None:
-            q = q.where(Job.user_id == scope_uid)
-        return int(db.execute(q).scalar_one())
-
-    total_q = select(func.count()).select_from(Job)
+    job_counts_q = select(Job.status, func.count()).select_from(Job)
     if scope_uid is not None:
-        total_q = total_q.where(Job.user_id == scope_uid)
-    total = int(db.execute(total_q).scalar_one())
-    running = count_jobs(*JobStatus.RUNNING_SET)
-    queued = count_jobs(JobStatus.QUEUED, JobStatus.UPLOADED, JobStatus.VALIDATING)
-    completed = count_jobs(JobStatus.COMPLETED)
-    failed = count_jobs(JobStatus.FAILED)
+        job_counts_q = job_counts_q.where(Job.user_id == scope_uid)
+    job_counts = {status: int(count) for status, count in db.execute(job_counts_q.group_by(Job.status)).all()}
+    total = sum(job_counts.values())
+    running = sum(job_counts.get(s, 0) for s in JobStatus.RUNNING_SET)
+    queued = sum(job_counts.get(s, 0) for s in (JobStatus.QUEUED, JobStatus.UPLOADED, JobStatus.VALIDATING))
+    completed = job_counts.get(JobStatus.COMPLETED, 0)
+    failed = job_counts.get(JobStatus.FAILED, 0)
 
-    gpus_available = int(
-        db.execute(
-            select(func.count()).select_from(GpuStatus).where(GpuStatus.status == GpuStatusEnum.AVAILABLE)
-        ).scalar_one()
-    )
-    gpus_busy = int(
-        db.execute(
-            select(func.count()).select_from(GpuStatus).where(GpuStatus.status == GpuStatusEnum.BUSY)
-        ).scalar_one()
-    )
+    gpu_counts = {
+        status: int(count)
+        for status, count in db.execute(
+            select(GpuStatus.status, func.count()).select_from(GpuStatus).group_by(GpuStatus.status)
+        ).all()
+    }
+    gpus_available = gpu_counts.get(GpuStatusEnum.AVAILABLE, 0)
+    gpus_busy = gpu_counts.get(GpuStatusEnum.BUSY, 0)
 
     used_gb, total_gb = storage.disk_usage_gb()
     return DashboardSummary(

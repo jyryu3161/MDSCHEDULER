@@ -133,6 +133,62 @@ def test_cancel_design(client):
     assert c.status_code == 200 and c.json()["status"] == "cancelled"
 
 
+def test_internal_design_reporter_endpoints(client):
+    from app.config import get_settings
+
+    h = _auth(client)
+    r = client.post("/api/design", headers=h,
+                    data={"name": "internal report", "initial_sequences": "KCCIVYP", "smiles": "C"})
+    design_id = r.json()["id"]
+    internal = {"X-Internal-Token": get_settings().INTERNAL_API_TOKEN}
+
+    assert client.post(
+        f"/api/internal/design/{design_id}/status",
+        headers=internal,
+        json={"status": "running_md", "current_generation": 2},
+    ).status_code == 200
+    assert client.post(
+        f"/api/internal/design/{design_id}/progress",
+        headers=internal,
+        json={"progress": 42.5, "current_generation": 2},
+    ).status_code == 200
+    assert client.post(
+        f"/api/internal/design/{design_id}/candidates",
+        headers=internal,
+        json={"rows": [{
+            "generation": 2,
+            "sequence": "KCCIVYP",
+            "docking_score": -5.5,
+            "md_dg": -8.2,
+            "fitness": 8.2,
+            "refined": True,
+        }]},
+    ).status_code == 200
+    assert client.post(
+        f"/api/internal/design/{design_id}/result",
+        headers=internal,
+        json={
+            "best_sequence": "KCCIVYP",
+            "best_fitness": 8.2,
+            "best_docking_score": -5.5,
+            "best_md_dg": -8.2,
+            "result_path": "/tmp/design",
+        },
+    ).status_code == 200
+    assert client.post(
+        f"/api/internal/design/{design_id}/status",
+        headers=internal,
+        json={"status": "completed"},
+    ).status_code == 200
+
+    detail = client.get(f"/api/design/{design_id}", headers=h).json()
+    assert detail["job"]["status"] == "completed"
+    assert detail["job"]["progress"] == 100.0
+    assert detail["job"]["best_sequence"] == "KCCIVYP"
+    assert detail["candidates"][0]["sequence"] == "KCCIVYP"
+    assert detail["candidates"][0]["refined"] is True
+
+
 def test_delete_design_requires_terminal(client):
     h = _auth(client)
     r = client.post("/api/design", headers=h,

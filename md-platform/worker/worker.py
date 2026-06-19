@@ -45,14 +45,19 @@ def main() -> int:
         return 1
 
     gpu = os.environ.get("WORKER_GPU_ID", "?")
-    # Must match the queue the backend enqueues to (services/queue_manager.py -> Queue("md")).
-    queue_name = os.environ.get("RQ_QUEUE", "md")
+    # Must match the queues the backend enqueues to:
+    # services/queue_manager.py -> Queue("md") and Queue("design").
+    queue_spec = os.environ.get("RQ_QUEUES") or os.environ.get("RQ_QUEUE") or "md,design"
+    queue_names = [q.strip() for q in queue_spec.replace(";", ",").split(",") if q.strip()]
+    if not queue_names:
+        queue_names = ["md", "design"]
     conn = Redis.from_url(settings.redis_url)
     print(f"[mdworker] worker starting: GPU={gpu} "
           f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES','')} "
-          f"queue={queue_name} redis={_redact_url(settings.redis_url)} engine={settings.resolved_engine}",
+          f"queues={','.join(queue_names)} redis={_redact_url(settings.redis_url)} "
+          f"engine={settings.resolved_engine}",
           flush=True)
-    worker = Worker([Queue(queue_name, connection=conn)], connection=conn)
+    worker = Worker([Queue(name, connection=conn) for name in queue_names], connection=conn)
     worker.work(with_scheduler=True)
     return 0
 

@@ -158,6 +158,7 @@ def _subjob_result(job_id: str, sj: SubJob) -> SubJobResult:
         id=sj.id,
         job_id=sj.job_id,
         pose_index=sj.pose_index,
+        replica_index=sj.replica_index,
         docking_score=sj.docking_score,
         status=sj.status,
         progress=sj.progress,
@@ -184,7 +185,7 @@ def job_results(
 ) -> JobResults:
     job = _get_owned_job(db, job_id, user)
     subjobs = (
-        db.execute(select(SubJob).where(SubJob.job_id == job_id).order_by(SubJob.pose_index))
+        db.execute(select(SubJob).where(SubJob.job_id == job_id).order_by(SubJob.pose_index, SubJob.replica_index))
         .scalars()
         .all()
     )

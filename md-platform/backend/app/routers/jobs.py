@@ -119,7 +119,7 @@ def get_job(
     _owned_or_admin(job, user)
 
     subjobs = (
-        db.execute(select(SubJob).where(SubJob.job_id == job_id).order_by(SubJob.pose_index))
+        db.execute(select(SubJob).where(SubJob.job_id == job_id).order_by(SubJob.pose_index, SubJob.replica_index))
         .scalars()
         .all()
     )

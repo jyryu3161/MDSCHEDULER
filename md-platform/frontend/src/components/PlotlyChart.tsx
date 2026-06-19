@@ -1,11 +1,16 @@
 import { useMemo } from "react";
 import createPlotlyComponent from "react-plotly.js/factory";
-import Plotly from "plotly.js-dist-min";
+import Plotly from "plotly.js/lib/core";
+import bar from "plotly.js/lib/bar";
+import heatmap from "plotly.js/lib/heatmap";
+import scatter from "plotly.js/lib/scatter";
 import type { PlotlyFigure } from "../types";
 import { FONT_FAMILY, PALETTE } from "../plotTheme";
 
-// Bind react-plotly.js to the prebuilt dist-min bundle (smaller than the full
-// source build and avoids bundling Plotly twice).
+Plotly.register([scatter, bar, heatmap]);
+
+// Bind react-plotly.js to a custom Plotly bundle with only the trace modules produced by the
+// worker (scatter, bar, heatmap). This keeps the lazy plot chunk much smaller than the full dist.
 const Plot = createPlotlyComponent(Plotly);
 
 // Publication defaults for any figure that doesn't carry its own full layout. Worker figures

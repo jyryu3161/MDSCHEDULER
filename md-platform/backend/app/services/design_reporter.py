@@ -111,7 +111,7 @@ class DesignReporter:
             db.close()
         self._publish(design_id)
 
-    def set_result(self, design_id: str, *, best_sequence: str, best_fitness: float,
+    def set_result(self, design_id: str, *, best_sequence: str | None, best_fitness: float,
                    best_docking_score, best_md_dg, result_path: str) -> None:
         db = self._session_factory()
         try:
