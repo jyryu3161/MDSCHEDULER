@@ -187,6 +187,7 @@ export interface JobCreate {
   pressure: number;
   use_gpu: boolean;
   priority: Priority;
+  compute_mmpbsa: boolean;
   hetatm_decisions: Record<string, HetatmDecision>;
   cif_options: {
     keep_waters: boolean;

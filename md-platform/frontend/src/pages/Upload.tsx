@@ -111,6 +111,7 @@ export function Upload() {
   const [pressure, setPressure] = useState(1.0);
   const [priority, setPriority] = useState<Priority>("normal");
   const [useGpu, setUseGpu] = useState(true);
+  const [computeMmpbsa, setComputeMmpbsa] = useState(false);
   const [keepWaters, setKeepWaters] = useState(false);
   const [keepIons, setKeepIons] = useState(true);
   const [selectChain, setSelectChain] = useState("All");
@@ -239,6 +240,7 @@ export function Upload() {
         pressure,
         use_gpu: useGpu,
         priority,
+        compute_mmpbsa: computeMmpbsa,
         hetatm_decisions: hetatmDecisions,
         cif_options: {
           keep_waters: keepWaters,
@@ -772,6 +774,24 @@ export function Upload() {
                   Use GPU
                 </label>
               </div>
+
+              <label className="mt-5 flex items-start gap-2 border-t border-slate-200 pt-4 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={computeMmpbsa}
+                  onChange={(e) => setComputeMmpbsa(e.target.checked)}
+                />
+                <span>
+                  <span className="block font-medium text-slate-800">
+                    Compute MM/GBSA binding score
+                  </span>
+                  <span className="mt-1 block text-xs text-slate-500">
+                    Optional post-run binding ΔG analysis. Leave off for screening or short runs;
+                    enable for stable protein-ligand poses when the extra runtime is acceptable.
+                  </span>
+                </span>
+              </label>
 
               <p className="mt-3 text-xs text-slate-500">
                 ff19SB + OPC is the platform default. If the ff19SB GROMACS port is
